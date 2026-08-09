@@ -121,8 +121,9 @@ func (s *MemoryEventStore) Append(
 func (s *MemoryEventStore) Load(ctx context.Context, stream EventStream, afterVersion int64) iter.Seq2[StoredEvent, error] {
 	return func(yield func(StoredEvent, error) bool) {
 		s.mu.Lock()
-		events, err := clone(s.streams[streamKey(stream)])
+		snapshot := append([]StoredEvent(nil), s.streams[streamKey(stream)]...)
 		s.mu.Unlock()
+		events, err := clone(snapshot)
 		if err != nil {
 			yield(StoredEvent{}, err)
 			return
@@ -151,8 +152,9 @@ func (s *MemoryEventStore) ScanSession(ctx context.Context, sessionID, afterCurs
 			return
 		}
 		s.mu.Lock()
-		events, cloneErr := clone(s.sessions[sessionID])
+		snapshot := append([]StoredEvent(nil), s.sessions[sessionID]...)
 		s.mu.Unlock()
+		events, cloneErr := clone(snapshot)
 		if cloneErr != nil {
 			yield(StoredEvent{}, cloneErr)
 			return

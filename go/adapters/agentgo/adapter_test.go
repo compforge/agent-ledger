@@ -94,6 +94,43 @@ func TestWrappedModelRecordsPhysicalAttempt(t *testing.T) {
 	}
 }
 
+func TestWrappedModelEarlyCloseHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	store := agentledger.NewMemoryEventStore()
+	adapter := newTestAdapter(t, ctx, store)
+	stream, err := adapter.WrapModel(nonTerminalStreamModel{}).GenerateStream(ctx, nil, nil)
+	if err != nil {
+		t.Fatalf("generate stream: %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for len(stream) < 16 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(stream) != 16 {
+		t.Fatalf("buffered events = %d, want 16", len(stream))
+	}
+	cancel()
+
+	var events []agentgo.StreamEvent
+	closeDeadline := time.After(time.Second)
+collect:
+	for {
+		select {
+		case event, ok := <-stream:
+			if !ok {
+				break collect
+			}
+			events = append(events, event)
+		case <-closeDeadline:
+			t.Fatal("wrapped stream did not close after cancellation")
+		}
+	}
+	if len(events) != 16 {
+		t.Fatalf("forwarded events = %d, want 16 without a post-cancel terminal event", len(events))
+	}
+}
+
 func newTestAdapter(t *testing.T, ctx context.Context, store agentledger.EventStore) *Adapter {
 	t.Helper()
 	adapter, err := New(ctx, Config{
@@ -133,6 +170,23 @@ func (*countingModel) GenerateStream(context.Context, []agentgo.Message, []agent
 }
 
 func (*countingModel) SupportsTools() bool { return true }
+
+type nonTerminalStreamModel struct{}
+
+func (nonTerminalStreamModel) Generate(context.Context, []agentgo.Message, []agentgo.ToolSpec, ...agentgo.CallOption) (*agentgo.LLMResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (nonTerminalStreamModel) GenerateStream(context.Context, []agentgo.Message, []agentgo.ToolSpec, ...agentgo.CallOption) (<-chan agentgo.StreamEvent, error) {
+	stream := make(chan agentgo.StreamEvent, 16)
+	for range 16 {
+		stream <- agentgo.StreamEvent{}
+	}
+	close(stream)
+	return stream, nil
+}
+
+func (nonTerminalStreamModel) SupportsTools() bool { return true }
 
 type failingStore struct {
 	agentledger.EventStore

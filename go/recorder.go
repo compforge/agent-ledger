@@ -2,6 +2,7 @@ package agentledger
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -43,6 +44,9 @@ func NewSessionRecorder(options RecorderOptions) *SessionRecorder {
 }
 
 func ResumeRecorder(ctx context.Context, options RecorderOptions) (*SessionRecorder, error) {
+	if options.ExpectedVersion != nil {
+		return nil, errors.New("resume recorder discovers the stream head; expected version must be nil")
+	}
 	recorder := NewSessionRecorder(options)
 	expectedVersion := int64(-1)
 	for event, err := range options.Store.Load(ctx, recorder.stream, -1) {

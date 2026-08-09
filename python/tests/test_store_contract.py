@@ -126,6 +126,15 @@ async def test_event_id_uniqueness_is_scoped_to_session(event_store: EventStore)
         [event(second_session, second_run, event_id=event_id)],
     )
 
+    first_events = await collect(
+        event_store.read_stream(EventStream(session_id=first_session, stream_id=first_run))
+    )
+    second_events = await collect(
+        event_store.read_stream(EventStream(session_id=second_session, stream_id=second_run))
+    )
+    assert [item.event_id for item in first_events] == [event_id]
+    assert [item.event_id for item in second_events] == [event_id]
+
 
 async def test_session_scan_merges_runs_and_pages(event_store: EventStore) -> None:
     session_id = str(uuid4())

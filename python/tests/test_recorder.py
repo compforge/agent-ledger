@@ -114,6 +114,37 @@ async def test_recorder_resume_continues_at_last_version() -> None:
     assert [event.stream_version for event in events] == [0, 1]
 
 
+async def test_recorder_state_stream_spans_runtime_runs() -> None:
+    store = MemoryEventStore()
+    session_id = str(uuid4())
+    stream_id = "framework/test/native-session"
+    actor = Actor(type="agent", id="test", framework="test")
+    original = SessionRecorder(
+        store=store,
+        session_id=session_id,
+        run_id="runtime-1",
+        actor=actor,
+        stream_id=stream_id,
+        parent_run_id="orchestrator-run",
+        caused_by_event_id="delegate-event",
+    )
+    await original.start_run()
+
+    resumed = await SessionRecorder.resume(
+        store=store,
+        session_id=session_id,
+        run_id="runtime-2",
+        actor=actor,
+        stream_id=stream_id,
+    )
+    await resumed.start_run()
+
+    events = [event async for event in store.read_stream(original.stream)]
+    assert [event.run_id for event in events] == ["runtime-1", "runtime-2"]
+    assert [event.stream_version for event in events] == [0, 1]
+    assert [event.parent_run_id for event in events] == ["orchestrator-run", None]
+
+
 def _recorder(store: MemoryEventStore) -> SessionRecorder:
     return SessionRecorder(
         store=store,

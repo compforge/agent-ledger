@@ -86,3 +86,13 @@ func TestDuplicateEventIDRejectsWholeBatch(t *testing.T) {
 		t.Fatalf("unexpected stored event %#v, error %v", event, err)
 	}
 }
+
+func TestResumeRecorderRejectsExpectedVersion(t *testing.T) {
+	expectedVersion := int64(0)
+	_, err := ResumeRecorder(context.Background(), RecorderOptions{
+		Store: NewMemoryEventStore(), ExpectedVersion: &expectedVersion,
+	})
+	if err == nil {
+		t.Fatal("resume accepted an explicit expected version")
+	}
+}

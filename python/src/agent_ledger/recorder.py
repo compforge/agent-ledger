@@ -28,7 +28,7 @@ class AttemptHandle(BaseModel):
 
 
 class SessionRecorder:
-    """Framework-facing recorder that serializes writes to one execution stream."""
+    """Framework-facing recorder that serializes writes to one event stream."""
 
     def __init__(
         self,
@@ -37,6 +37,7 @@ class SessionRecorder:
         session_id: str,
         run_id: str,
         actor: Actor,
+        stream_id: str | None = None,
         expected_version: int = -1,
         parent_run_id: str | None = None,
         caused_by_event_id: str | None = None,
@@ -45,7 +46,7 @@ class SessionRecorder:
             raise ValueError("parent_run_id and caused_by_event_id must be set together")
         self.store = store
         self.run_id = run_id
-        self.stream = EventStream(session_id=session_id, stream_id=run_id)
+        self.stream = EventStream(session_id=session_id, stream_id=stream_id or run_id)
         self.actor = actor
         self.expected_version = expected_version
         self.parent_run_id = parent_run_id
@@ -60,14 +61,15 @@ class SessionRecorder:
         session_id: str,
         run_id: str,
         actor: Actor,
+        stream_id: str | None = None,
     ) -> Self:
-        stream = EventStream(session_id=session_id, stream_id=run_id)
+        stream = EventStream(session_id=session_id, stream_id=stream_id or run_id)
         expected_version = -1
         parent_run_id: str | None = None
         caused_by_event_id: str | None = None
         async for event in store.read_stream(stream):
             expected_version = event.stream_version
-            if event.parent_run_id is not None:
+            if event.run_id == run_id and event.parent_run_id is not None:
                 parent_run_id = event.parent_run_id
                 caused_by_event_id = event.caused_by_event_id
         return cls(
@@ -75,6 +77,7 @@ class SessionRecorder:
             session_id=session_id,
             run_id=run_id,
             actor=actor,
+            stream_id=stream.stream_id,
             expected_version=expected_version,
             parent_run_id=parent_run_id,
             caused_by_event_id=caused_by_event_id,

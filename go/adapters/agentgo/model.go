@@ -74,7 +74,11 @@ func (m *recordingModel) GenerateStream(ctx context.Context, messages []agentgo.
 			if err := m.adapter.runtimeRecorder.ModelFailed(ctx, attempt, failure); err != nil {
 				failure = fmt.Errorf("%v; record failure: %w", failure, err)
 			}
-			output <- agentgo.StreamEvent{Type: agentgo.StreamEventError, Err: failure}
+			select {
+			case output <- agentgo.StreamEvent{Type: agentgo.StreamEventError, Err: failure}:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 	return output, nil
