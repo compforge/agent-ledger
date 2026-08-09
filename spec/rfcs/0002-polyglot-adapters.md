@@ -65,6 +65,10 @@ The strict Pi integration implements its native `SessionStorage`. Entries and ac
 are stored losslessly, then Pi's `Session` rebuilds model context. Direct AgentHarness hooks add
 normalized model, tool, turn, and run events.
 
+Pi's append-only entry tree is useful native recovery state, but it is not the portable Agent
+Ledger session model. Other frameworks and orchestrators are not required to expose Pi entry types,
+leaf selection, or branching semantics.
+
 A coding-agent extension that swallows model-hook errors must declare model prewrite as
 `best_effort`. It can still emit telemetry, but it is not the strict profile.
 

@@ -96,3 +96,44 @@ func TestResumeRecorderRejectsExpectedVersion(t *testing.T) {
 		t.Fatal("resume accepted an explicit expected version")
 	}
 }
+
+func TestOrchestratorLinksMultipleAgentRuns(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryEventStore()
+	orchestrator := NewSessionRecorder(RecorderOptions{
+		Store: store, SessionID: "session", RunID: "orchestrator-run",
+		Actor: Actor{Type: "orchestrator", ID: "planner"},
+	})
+	if _, err := orchestrator.StartRun(ctx, nil); err != nil {
+		t.Fatalf("start orchestrator: %v", err)
+	}
+	for _, role := range []string{"researcher", "reviewer"} {
+		dispatch, err := orchestrator.Record(
+			ctx, "orchestration.agent.dispatched", map[string]any{"role": role}, "", "",
+		)
+		if err != nil {
+			t.Fatalf("record %s dispatch: %v", role, err)
+		}
+		child := orchestrator.Child(role+"-run", Actor{Type: "agent", ID: role}, dispatch.EventID)
+		if _, err := child.StartRun(ctx, nil); err != nil {
+			t.Fatalf("start %s: %v", role, err)
+		}
+	}
+
+	var childRuns []string
+	for event, err := range store.ScanSession(ctx, "session", "") {
+		if err != nil {
+			t.Fatalf("scan session: %v", err)
+		}
+		if event.ParentRunID == "" {
+			continue
+		}
+		if event.ParentRunID != "orchestrator-run" || event.CausedByEventID == "" {
+			t.Fatalf("invalid causal edge: %#v", event.ProposedEvent)
+		}
+		childRuns = append(childRuns, event.RunID)
+	}
+	if len(childRuns) != 2 || childRuns[0] != "researcher-run" || childRuns[1] != "reviewer-run" {
+		t.Fatalf("child runs = %v", childRuns)
+	}
+}

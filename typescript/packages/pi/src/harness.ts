@@ -67,7 +67,10 @@ export function bindPiHarness(harness: PiHarnessLike, recorder: SessionRecorder)
   disposers.push(harness.subscribe(async (event) => {
     switch (event.type) {
       case "agent_start":
-        await recorder.record("run.started", { payload: { adapter: PI_ADAPTER.adapter_id } });
+        await recorder.startRun({
+          adapter: { id: PI_ADAPTER.adapter_id, version: PI_ADAPTER.adapter_version },
+          framework: { name: PI_ADAPTER.framework },
+        });
         break;
       case "turn_start":
         turn += 1;

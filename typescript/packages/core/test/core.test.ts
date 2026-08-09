@@ -3,7 +3,13 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import { canonicalAppendDigest, DuplicateEvent, MemoryEventStore, proposedEvent } from "../src/index.js";
+import {
+  canonicalAppendDigest,
+  DuplicateEvent,
+  MemoryEventStore,
+  proposedEvent,
+  SessionRecorder,
+} from "../src/index.js";
 
 test("event streams order framework state independently from semantic runs", async () => {
   const store = new MemoryEventStore();
@@ -69,4 +75,35 @@ test("duplicate event ids reject the whole append batch", async () => {
   const stored = [];
   for await (const event of store.readStream(stream)) stored.push(event);
   assert.deepEqual(stored, []);
+});
+
+test("an orchestrator links multiple agent runs in one session", async () => {
+  const store = new MemoryEventStore();
+  const orchestrator = new SessionRecorder({
+    store,
+    sessionId: "session",
+    runId: "orchestrator-run",
+    actor: { type: "orchestrator", id: "planner" },
+  });
+  await orchestrator.startRun();
+
+  for (const role of ["researcher", "reviewer"]) {
+    const dispatch = await orchestrator.record("orchestration.agent.dispatched", {
+      payload: { role },
+    });
+    const child = orchestrator.child({
+      runId: `${role}-run`,
+      actor: { type: "agent", id: role },
+      causedByEventId: dispatch.event_id,
+    });
+    await child.startRun();
+  }
+
+  const childStarts = [];
+  for await (const event of store.scanSession("session")) {
+    if (event.parent_run_id !== undefined) childStarts.push(event);
+  }
+  assert.deepEqual(childStarts.map((event) => event.run_id), ["researcher-run", "reviewer-run"]);
+  assert.deepEqual(childStarts.map((event) => event.parent_run_id), ["orchestrator-run", "orchestrator-run"]);
+  assert.ok(childStarts.every((event) => event.caused_by_event_id !== undefined));
 });

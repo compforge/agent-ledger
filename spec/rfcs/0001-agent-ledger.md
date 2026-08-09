@@ -8,24 +8,41 @@ Draft specification for the `0.x` library line.
 
 Agent loops can be interrupted by process replacement, autoscaling, model errors, and rate limits.
 Framework checkpoints solve recovery inside one runtime, but they do not necessarily provide a
-framework-neutral timeline across distributed agents. Agent Ledger defines the durable facts that
-framework integrations can share while leaving framework state restoration to those integrations.
+framework-neutral timeline across distributed agents and their orchestrator. Agent Ledger defines
+the durable execution facts that all of those producers can share while leaving framework state
+restoration and workflow control to their respective owners.
 
 ## Concepts
 
 | Concept | Meaning |
 | --- | --- |
-| Session | End-to-end task and the boundary of the global timeline. |
+| Session | End-to-end task and the boundary of the global timeline. It is not a framework-native chat session. |
 | Event Stream | One optimistic-concurrency partition inside a session. |
+| Run | One semantic execution by an agent, orchestrator, or other actor. |
 | Step | Logical work that survives retries. |
 | Attempt | One physical model or tool call within a step. |
 | Event | Immutable fact proposed by a producer and enriched by a store. |
 | Framework Adapter | Recording and recovery bindings for one framework. |
 | Trajectory | Read-side projection for evaluation or analysis. |
 
-A child agent starts another run in the same session. Its `run.started` event carries
-`parent_run_id` and `caused_by_event_id`. The causal DAG, rather than wall-clock order, is the
-authoritative relationship between runs.
+When an orchestrator or agent delegates work, the child actor starts another run in the same
+session. Its `run.started` event carries `parent_run_id` and `caused_by_event_id`. The causal DAG,
+rather than wall-clock order, is the authoritative relationship between runs.
+
+## Layer boundary
+
+Agent Ledger crosses the Agent Loop and Orchestrator layers without owning either one:
+
+- an agent loop records steps, model and tool attempts, outcomes, and framework-native recovery
+  state;
+- an orchestrator records decisions, delegation, approvals, and execution outcomes while retaining
+  ownership of desired state, scheduling, leases, and reconciliation;
+- stores own atomic persistence, not agent or workflow semantics;
+- read-side consumers derive recovery input, timelines, trajectories, alerts, and evaluation data.
+
+The ledger does not promote events into memory, change prompts or skills, decide whether a result
+is correct, or activate a new capability version. Those systems may record their decisions in the
+same session, but their policies remain outside the core library.
 
 ## Event envelope
 
@@ -38,6 +55,22 @@ establishes causality.
 
 Large inputs and outputs should use an `ArtifactRef`. The event keeps the content digest, media
 type, byte size, and URI while an application-selected `ArtifactStore` owns the bytes.
+
+Core normalized event families use `session.*`, `run.*`, `step.*`, `model.*`, and `tool.*`.
+Framework-native records use `framework.<framework>.*`. Orchestrators and applications may add
+namespaced event types such as `orchestration.agent.dispatched`; readers preserve unknown event
+types and payloads.
+
+### Run provenance
+
+Analysis needs to know which system configuration produced a run. A `run.started` payload should
+therefore identify the agent or orchestrator implementation, framework and adapter versions, model,
+code revision, and relevant prompt, skill, toolset, dataset, or verifier versions or digests when
+they are known.
+
+Provenance stays in the run-start payload instead of being repeated in every envelope. Consumers
+join it to later events by `run_id`. V1 deliberately leaves the payload open while real adapters
+establish which references are portable enough to standardize.
 
 ## Append contract
 
@@ -97,6 +130,19 @@ construct a generic run context. A framework adapter defines:
 The bundled plain-loop profile demonstrates snapshot recovery. Frameworks with native storage or
 checkpointing preserve that state losslessly and restore with their own APIs. RFC 0002 defines the
 recording/recovery split and capability declarations.
+
+## Read models and projections
+
+The append log is the source of truth; recovery and analysis are independent projections:
+
+- a framework adapter combines native records with normalized attempts to restore its own context;
+- a session timeline merges all event streams for display, then uses causal links to explain the
+  relationship between actors;
+- trajectory exporters select normalized steps and attempts for evaluation or training;
+- memory and capability-improvement pipelines consume only facts accepted by their own validation
+  and approval policies.
+
+No projection may rewrite historical events or claim that commit order establishes causality.
 
 ## Store durability
 
