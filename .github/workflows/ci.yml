@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  python:
     runs-on: ubuntu-latest
     services:
       redis:
@@ -40,13 +40,46 @@ jobs:
       AGENT_LEDGER_REDIS_URL: redis://localhost:6379/0
       AGENT_LEDGER_POSTGRES_URL: postgresql+asyncpg://ledger:ledger@localhost:5432/ledger
       AGENT_LEDGER_MYSQL_URL: mysql+asyncmy://ledger:ledger@localhost:3306/ledger
+    defaults:
+      run:
+        working-directory: python
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.11"
           enable-cache: true
+          cache-dependency-glob: python/uv.lock
       - run: uv sync --all-extras
       - run: make lint
       - run: make test
 
+  typescript:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+      - run: npm ci
+      - run: make lint
+      - run: make test
+
+  go:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go/go.sum
+      - run: make lint
+      - run: make test

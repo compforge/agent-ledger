@@ -1,17 +1,20 @@
 .PHONY: fix lint test build
 
 fix:
-	uv run ruff format .
-	uv run ruff check --fix .
+	$(MAKE) -C python fix
+	$(MAKE) -C go fix
 
 lint:
-	uv run ruff format --check .
-	uv run ruff check .
-	uv run mypy
+	$(MAKE) -C python lint
+	$(MAKE) -C typescript lint
+	$(MAKE) -C go lint
 
 test:
-	uv run pytest
+	$(MAKE) -C python test
+	$(MAKE) -C typescript test
+	$(MAKE) -C go test
 
 build:
-	uv build
-
+	$(MAKE) -C python build
+	$(MAKE) -C typescript build
+	$(MAKE) -C go build

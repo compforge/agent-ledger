@@ -27,6 +27,7 @@
     "caused_by_event_id": { "type": "string", "minLength": 1 },
     "payload": { "type": "object" },
     "extensions": { "type": "object" },
+    "stream_id": { "type": "string", "minLength": 1 },
     "stream_version": { "type": "integer", "minimum": 0 },
     "commit_cursor": { "type": "string", "minLength": 1 },
     "committed_at": { "type": "string", "format": "date-time" }

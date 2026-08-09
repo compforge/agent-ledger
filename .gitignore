@@ -1,5 +1,8 @@
 .venv/
 .worktree/
+.worktrees/
+node_modules/
+*.tsbuildinfo
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/

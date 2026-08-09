@@ -1,0 +1,20 @@
+{
+  "canonicalization": "RFC8785",
+  "canonical": "[{\"actor\":{\"framework\":\"pi\",\"id\":\"writer\",\"type\":\"agent\"},\"attempt_id\":\"attempt-1\",\"event_id\":\"event-1\",\"event_type\":\"model.requested\",\"extensions\":{},\"occurred_at\":\"2026-01-02T03:04:05Z\",\"payload\":{\"model\":\"claude\",\"temperature\":0.25,\"tokens\":1024},\"run_id\":\"run-1\",\"schema_version\":\"1.0\",\"session_id\":\"session-1\",\"step_id\":\"step-1\"}]",
+  "sha256": "b83e0ae0fcf7e76613c66f34b6c034cb0d35e517271aea5cf6c8820ac7ef5721",
+  "events": [
+    {
+      "schema_version": "1.0",
+      "event_id": "event-1",
+      "event_type": "model.requested",
+      "session_id": "session-1",
+      "run_id": "run-1",
+      "actor": { "type": "agent", "id": "writer", "framework": "pi" },
+      "occurred_at": "2026-01-02T03:04:05Z",
+      "step_id": "step-1",
+      "attempt_id": "attempt-1",
+      "payload": { "model": "claude", "temperature": 0.25, "tokens": 1024 },
+      "extensions": {}
+    }
+  ]
+}

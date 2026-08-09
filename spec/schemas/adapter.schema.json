@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/adapter.schema.json",
+  "title": "Agent Ledger Adapter Descriptor",
+  "type": "object",
+  "required": ["schema_version", "adapter_id", "adapter_version", "framework", "framework_version", "capabilities"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "adapter_id": { "type": "string", "minLength": 1 },
+    "adapter_version": { "type": "string", "minLength": 1 },
+    "framework": { "type": "string", "minLength": 1 },
+    "framework_version": { "type": "string", "minLength": 1 },
+    "capabilities": {
+      "type": "object",
+      "required": ["model_prewrite", "tool_prewrite", "outcome_gate", "recovery", "preserves_native_state"],
+      "properties": {
+        "model_prewrite": { "$ref": "#/$defs/recordingGuarantee" },
+        "tool_prewrite": { "$ref": "#/$defs/recordingGuarantee" },
+        "outcome_gate": { "$ref": "#/$defs/recordingGuarantee" },
+        "recovery": { "enum": ["native_store", "snapshot", "checkpoint", "unsupported"] },
+        "preserves_native_state": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "recordingGuarantee": { "enum": ["strict", "best_effort", "unsupported"] }
+  }
+}
