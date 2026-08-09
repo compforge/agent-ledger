@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "exactOptionalPropertyTypes": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noUncheckedIndexedAccess": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2022",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "references": [{ "path": "../core" }]
+}

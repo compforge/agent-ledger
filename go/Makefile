@@ -1,0 +1,13 @@
+.PHONY: fix lint test build
+
+fix:
+	go fmt ./...
+
+lint:
+	go vet ./...
+
+test:
+	go test ./...
+
+build:
+	go build ./...
