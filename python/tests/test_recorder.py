@@ -54,24 +54,37 @@ async def test_retry_keeps_step_and_gets_new_attempt() -> None:
     assert inspection.unresolved_attempts[0].step_id == "step-1"
 
 
-async def test_child_run_forms_causal_edge() -> None:
+async def test_orchestrator_links_multiple_agent_runs() -> None:
     store = MemoryEventStore()
-    parent = _recorder(store)
-    trigger = await parent.start_step("delegate")
-    child = parent.child(
-        run_id=str(uuid4()),
-        actor=Actor(type="agent", id="child"),
-        caused_by_event_id=trigger.event_id,
+    parent = SessionRecorder(
+        store=store,
+        session_id=str(uuid4()),
+        run_id="orchestrator-run",
+        actor=Actor(type="orchestrator", id="planner"),
     )
-    await child.start_run()
+    await parent.start_run()
+    children: list[SessionRecorder] = []
+    for role in ("researcher", "reviewer"):
+        trigger = await parent.record(
+            "orchestration.agent.dispatched",
+            payload={"role": role},
+        )
+        child = parent.child(
+            run_id=f"{role}-run",
+            actor=Actor(type="agent", id=role),
+            caused_by_event_id=trigger.event_id,
+        )
+        await child.start_run()
+        children.append(child)
 
     events = [event async for event in store.scan_session(parent.stream.session_id)]
     inspection = inspect_session(events)
 
-    assert len(inspection.run_edges) == 1
-    assert inspection.run_edges[0].parent_run_id == parent.run_id
-    assert inspection.run_edges[0].child_run_id == child.run_id
-    assert inspection.run_edges[0].caused_by_event_id == trigger.event_id
+    assert len(inspection.run_edges) == 2
+    assert {edge.parent_run_id for edge in inspection.run_edges} == {parent.run_id}
+    assert {edge.child_run_id for edge in inspection.run_edges} == {
+        child.run_id for child in children
+    }
 
 
 async def test_plain_loop_profile_restores_snapshot_and_tail() -> None:

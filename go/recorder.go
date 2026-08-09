@@ -13,6 +13,7 @@ type RecorderOptions struct {
 	RunID           string
 	StreamID        string
 	Actor           Actor
+	Parent          *CausalParent
 	ExpectedVersion *int64
 }
 
@@ -21,6 +22,7 @@ type SessionRecorder struct {
 	stream          EventStream
 	runID           string
 	actor           Actor
+	parent          *CausalParent
 	expectedVersion int64
 	mu              sync.Mutex
 }
@@ -34,11 +36,17 @@ func NewSessionRecorder(options RecorderOptions) *SessionRecorder {
 	if options.ExpectedVersion != nil {
 		expectedVersion = *options.ExpectedVersion
 	}
+	var parent *CausalParent
+	if options.Parent != nil {
+		copy := *options.Parent
+		parent = &copy
+	}
 	return &SessionRecorder{
 		store:           options.Store,
 		stream:          EventStream{SessionID: options.SessionID, StreamID: streamID},
 		runID:           options.RunID,
 		actor:           options.Actor,
+		parent:          parent,
 		expectedVersion: expectedVersion,
 	}
 }
@@ -64,12 +72,39 @@ func (r *SessionRecorder) RunID() string       { return r.runID }
 func (r *SessionRecorder) Store() EventStore   { return r.store }
 
 func (r *SessionRecorder) Record(ctx context.Context, eventType string, payload map[string]any, stepID, attemptID string) (StoredEvent, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	event := NewEvent(eventType, r.stream.SessionID, r.runID, r.actor)
-	event.Payload = payload
+	event.Payload = payloadOrEmpty(payload)
 	event.StepID = stepID
 	event.AttemptID = attemptID
+	return r.appendEvent(ctx, event)
+}
+
+func (r *SessionRecorder) StartRun(ctx context.Context, payload map[string]any) (StoredEvent, error) {
+	event := NewEvent("run.started", r.stream.SessionID, r.runID, r.actor)
+	event.Payload = payloadOrEmpty(payload)
+	if r.parent != nil {
+		event.ParentRunID = r.parent.RunID
+		event.CausedByEventID = r.parent.CausedByEventID
+	}
+	return r.appendEvent(ctx, event)
+}
+
+func (r *SessionRecorder) Child(runID string, actor Actor, causedByEventID string) *SessionRecorder {
+	return NewSessionRecorder(RecorderOptions{
+		Store:     r.store,
+		SessionID: r.stream.SessionID,
+		RunID:     runID,
+		Actor:     actor,
+		Parent: &CausalParent{
+			RunID:           r.runID,
+			CausedByEventID: causedByEventID,
+		},
+	})
+}
+
+func (r *SessionRecorder) appendEvent(ctx context.Context, event ProposedEvent) (StoredEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	receipt, err := r.store.Append(ctx, r.stream, r.expectedVersion, NewID(), event)
 	if err != nil {
 		return StoredEvent{}, err
@@ -126,4 +161,11 @@ func errorPayload(err error) map[string]any {
 		return map[string]any{"error": "unknown error"}
 	}
 	return map[string]any{"error": err.Error()}
+}
+
+func payloadOrEmpty(payload map[string]any) map[string]any {
+	if payload == nil {
+		return map[string]any{}
+	}
+	return payload
 }

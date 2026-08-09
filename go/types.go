@@ -13,6 +13,11 @@ type EventStream struct {
 	StreamID  string `json:"stream_id"`
 }
 
+type CausalParent struct {
+	RunID           string
+	CausedByEventID string
+}
+
 type ProposedEvent struct {
 	SchemaVersion   string         `json:"schema_version"`
 	EventID         string         `json:"event_id"`

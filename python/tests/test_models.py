@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.exceptions import ValidationError
 
 from agent_ledger import Actor, MemoryArtifactStore, ProposedEvent, StoredEvent
 from agent_ledger.frameworks.plain_loop import PlainLoopProfile
@@ -30,6 +32,25 @@ def test_event_matches_normative_json_schema() -> None:
         committed_at=utc_now(),
     )
     validator.validate(stored.model_dump(mode="json", exclude_none=True))
+
+
+def test_event_schema_requires_complete_causal_parent() -> None:
+    schema_path = Path(__file__).parents[2] / "spec" / "schemas" / "event.schema.json"
+    schema = json.loads(schema_path.read_text())
+    event = {
+        "schema_version": "1.0",
+        "event_id": "event",
+        "event_type": "run.started",
+        "session_id": "session",
+        "run_id": "run",
+        "actor": {"type": "agent", "id": "child"},
+        "occurred_at": "2026-08-09T00:00:00Z",
+        "parent_run_id": "parent",
+        "payload": {},
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(event)
 
 
 async def test_memory_artifact_round_trip() -> None:

@@ -32,6 +32,10 @@
     "commit_cursor": { "type": "string", "minLength": 1 },
     "committed_at": { "type": "string", "format": "date-time" }
   },
+  "dependentRequired": {
+    "parent_run_id": ["caused_by_event_id"],
+    "caused_by_event_id": ["parent_run_id"]
+  },
   "additionalProperties": false,
   "$defs": {
     "actor": {
