@@ -15,15 +15,21 @@ Timeline、轨迹分析和评测等下游用途消费。
 
 ## 代码地图与核心模块
 
-| 目录 | 职责 |
-| --- | --- |
-| `spec/` | Event envelope、追加语义、Adapter 能力和恢复边界的唯一规范来源 |
-| `conformance/` | 跨语言 canonical encoding、append digest 和契约向量 |
-| `python/` | Python Core、Memory/Redis/SQL Store、投影与 plain-loop 参考实现 |
-| `typescript/packages/core/` | TypeScript Core 与 Memory Store |
-| `typescript/packages/pi/` | Pi hooks 和 lossless native `SessionStorage` 适配 |
-| `go/` | Go Core、Memory Store 与公共 Recorder API |
-| `go/adapters/agentgo/` | AgentGo model/tool/message hooks 与原生恢复适配 |
+```text
+.
+├── spec/                         # 协议的唯一规范来源
+│   ├── rfcs/                     # 追加语义、Adapter 能力与恢复边界
+│   └── schemas/                  # Event envelope 与 Adapter descriptor
+├── conformance/                  # 跨语言 canonical encoding、digest 与契约向量
+├── python/                       # Python Core、Store、投影与 plain-loop 参考实现
+├── typescript/
+│   └── packages/
+│       ├── core/                 # TypeScript Core 与 Memory Store
+│       └── pi/                   # Pi hooks 与 lossless native SessionStorage
+└── go/                           # Go Core、Memory Store 与公共 Recorder API
+    └── adapters/
+        └── agentgo/              # AgentGo hooks 与原生恢复适配
+```
 
 ## 核心模型与关键约定
 
