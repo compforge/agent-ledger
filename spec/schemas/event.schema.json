@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/event.schema.json",
+  "title": "Agent Ledger Event",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "session_id",
+    "run_id",
+    "actor",
+    "occurred_at",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "event_id": { "type": "string", "minLength": 1 },
+    "event_type": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "actor": { "$ref": "#/$defs/actor" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "step_id": { "type": "string", "minLength": 1 },
+    "attempt_id": { "type": "string", "minLength": 1 },
+    "parent_run_id": { "type": "string", "minLength": 1 },
+    "caused_by_event_id": { "type": "string", "minLength": 1 },
+    "payload": { "type": "object" },
+    "extensions": { "type": "object" },
+    "stream_version": { "type": "integer", "minimum": 0 },
+    "commit_cursor": { "type": "string", "minLength": 1 },
+    "committed_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "enum": ["agent", "orchestrator", "tool", "human", "system"]
+        },
+        "id": { "type": "string", "minLength": 1 },
+        "framework": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "artifact_ref": {
+      "type": "object",
+      "required": ["uri", "sha256", "size", "content_type"],
+      "properties": {
+        "uri": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size": { "type": "integer", "minimum": 0 },
+        "content_type": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  }
+}
