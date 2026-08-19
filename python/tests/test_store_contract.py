@@ -169,7 +169,7 @@ async def test_framework_state_stream_can_span_runtime_runs(event_store: EventSt
     assert [item.run_id for item in stored] == ["runtime-1", "runtime-2"]
 
 
-async def test_append_snapshots_nested_payload(event_store: EventStore) -> None:
+async def test_committed_event_content_is_immutable(event_store: EventStore) -> None:
     session_id = str(uuid4())
     run_id = str(uuid4())
     stream = EventStream(session_id=session_id, stream_id=run_id)
@@ -181,3 +181,7 @@ async def test_append_snapshots_nested_payload(event_store: EventStore) -> None:
 
     stored = await collect(event_store.read_stream(stream))
     assert stored[0].payload["nested"] == {"value": 1}
+    stored[0].payload["nested"]["value"] = 3
+
+    reloaded = await collect(event_store.read_stream(stream))
+    assert reloaded[0].payload["nested"] == {"value": 1}
