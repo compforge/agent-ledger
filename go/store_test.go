@@ -87,6 +87,38 @@ func TestDuplicateEventIDRejectsWholeBatch(t *testing.T) {
 	}
 }
 
+func TestCommittedEventContentIsImmutable(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryEventStore()
+	stream := EventStream{SessionID: "session", StreamID: "run"}
+	event := NewEvent("test.recorded", "session", "run", Actor{Type: "agent", ID: "test"})
+	event.Payload["nested"] = map[string]any{"value": float64(1)}
+
+	if _, err := store.Append(ctx, stream, -1, "append", event); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	event.Payload["nested"].(map[string]any)["value"] = float64(2)
+
+	stored := loadEvents(t, store, stream)
+	stored[0].Payload["nested"].(map[string]any)["value"] = float64(3)
+	reloaded := loadEvents(t, store, stream)
+	if got := reloaded[0].Payload["nested"].(map[string]any)["value"]; got != float64(1) {
+		t.Fatalf("committed payload value = %v, want 1", got)
+	}
+}
+
+func loadEvents(t *testing.T, store EventStore, stream EventStream) []StoredEvent {
+	t.Helper()
+	var events []StoredEvent
+	for event, err := range store.Load(context.Background(), stream, -1) {
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
 func TestResumeRecorderRejectsExpectedVersion(t *testing.T) {
 	expectedVersion := int64(0)
 	_, err := ResumeRecorder(context.Background(), RecorderOptions{

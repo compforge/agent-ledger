@@ -82,6 +82,13 @@ The empty stream version is `-1`; the first stored event has version `0`. A stre
 await store.append(stream, expected_version, append_id, events)
 ```
 
+The logical event history is append-only. After returning a commit receipt, an `EventStore` MUST
+NOT update or delete the accepted events through the store contract. Corrections and redactions
+MUST be represented by later events that reference the affected facts. Implementations may update
+internal version, cursor, and index records as they append new events. Physical archival or deletion
+under an explicit retention policy is outside the `EventStore` contract and MUST NOT rewrite the
+identity, content, or ordering metadata of retained events.
+
 The operation is an atomic batch with these outcomes:
 
 1. If `append_id` was committed with identical canonical event content, return its original

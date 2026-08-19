@@ -77,6 +77,31 @@ test("duplicate event ids reject the whole append batch", async () => {
   assert.deepEqual(stored, []);
 });
 
+test("committed event content is immutable", async () => {
+  const store = new MemoryEventStore();
+  const stream = { session_id: "session", stream_id: "run" };
+  const event = proposedEvent({
+    event_id: "event",
+    occurred_at: "2026-01-02T03:04:05.000Z",
+    event_type: "test.recorded",
+    session_id: stream.session_id,
+    run_id: stream.stream_id,
+    actor: { type: "agent", id: "test" },
+    payload: { nested: { value: 1 } },
+  });
+
+  await store.append(stream, -1, "append", [event]);
+  (event.payload.nested as { value: number }).value = 2;
+
+  const stored = [];
+  for await (const item of store.readStream(stream)) stored.push(item);
+  (stored[0]!.payload.nested as { value: number }).value = 3;
+
+  const reloaded = [];
+  for await (const item of store.readStream(stream)) reloaded.push(item);
+  assert.deepEqual(reloaded[0]!.payload.nested, { value: 1 });
+});
+
 test("an orchestrator links multiple agent runs in one session", async () => {
   const store = new MemoryEventStore();
   const orchestrator = new SessionRecorder({

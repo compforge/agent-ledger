@@ -81,6 +81,11 @@ Appends are atomic, idempotent by RFC 8785 canonical event content, and protecte
 concurrency. `commit_cursor` gives one session a display/pagination order; causal links, not cursor
 or timestamps, define execution relationships.
 
+Committed event history is append-only. `EventStore` does not update or delete accepted events;
+corrections and redactions are represented by later events. Internal version and cursor bookkeeping
+may change as new events arrive, while physical retention remains an explicit deployment policy
+outside the logical event contract.
+
 ## Development
 
 ```bash
