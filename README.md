@@ -48,7 +48,7 @@ not silently replay a side-effecting tool.
 | `conformance/` | Cross-language golden vectors and adapter contract tests |
 | `python/` | Python core SDK plus memory, Redis, and SQLAlchemy stores |
 | `typescript/` | TypeScript core SDK and Pi adapter |
-| `go/` | Go core SDK and AgentGo adapter |
+| `go/` | Go core SDK, memory/Bolt stores, and AgentGo adapter |
 
 Current framework profiles are integration examples, not definitions of the core session model:
 

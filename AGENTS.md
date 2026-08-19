@@ -26,9 +26,11 @@ Timeline、轨迹分析和评测等下游用途消费。
 │   └── packages/
 │       ├── core/                 # TypeScript Core 与 Memory Store
 │       └── pi/                   # Pi hooks 与 lossless native SessionStorage
-└── go/                           # Go Core、Memory Store 与公共 Recorder API
-    └── adapters/
-        └── agentgo/              # AgentGo hooks 与原生恢复适配
+└── go/                           # Go Core、Store 与公共 Recorder API
+    ├── adapters/
+    │   └── agentgo/              # AgentGo hooks 与原生恢复适配
+    └── stores/
+        └── bolt/                 # 单文件持久化 EventStore
 ```
 
 ## 核心模型与关键约定
