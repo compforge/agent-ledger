@@ -89,7 +89,8 @@ Event append 前崩溃会留下未关联 revision；它不构成已完成 Run，
 反过来，同批 Event 成功后，读侧不会看到缺少 Checkpoint 引用的 `run.completed`。
 
 Run inspection 会汇总全部终态 Event、Checkpoint link 和未决 Attempt，但不从中选择当前状态或恢复点。
-`run.completed` 是 Harness 执行事实，不等价于上游已经接受结果、处理输入或提交控制状态。
+`run.completed` 只表示生产者声明该 Run 范围已经完成；Run 的业务含义以及上游是否接受结果、处理输入
+或提交控制状态，仍由上游决定。
 
 ## 与数据库恢复的类比
 

@@ -12,7 +12,7 @@ contracts; framework adapters bind those contracts to concrete harness hooks and
 Agent Ledger is not an agent loop, workflow engine, scheduler, or universal checkpoint format.
 
 ```text
-Orchestrator ── Session / Run identity, delegation ──┐
+Upstream host ── Session / Run identity ─────────────┐
                                                     ├── Agent Ledger
 Harness ── Lane / Turn / Action / Attempt facts ────┘       │
                                                             ├── audit
@@ -35,7 +35,8 @@ Actor ────────────────────────�
 CheckpointKey → Checkpoint revision* ── optional Lane/Event anchor
 ```
 
-- `Session` is one upstream task; `Run` is one upstream harness execution.
+- `Session` is one upstream task. `Run` is the upstream-defined grouping between Session and Lane;
+  Ledger requires a stable `run_id` but does not define its domain meaning or lifecycle.
 - `Lane` is one serial line inside a Run and the optimistic-concurrency boundary. A Run normally
   has a `main` Lane and may have branch or framework-native-state Lanes.
 - `Turn` is a stable interaction boundary.
