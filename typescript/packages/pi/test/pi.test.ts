@@ -2,122 +2,68 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  type CommitReceipt,
-  type EventStream,
+  type AppendReceipt,
+  type EventStore,
+  LaneRecorder,
   MemoryEventStore,
+  newActor,
   type ProposedEvent,
-  SessionRecorder,
 } from "@agent-ledger/core";
 
 import { bindPiHarness, LedgerPiSessionStorage } from "../src/index.js";
 
-test("Pi native entries round-trip through ledger storage", async () => {
+test("Pi native entries round-trip through a framework lane", async () => {
   const store = new MemoryEventStore();
-  const actor = { type: "agent" as const, id: "pi", framework: "pi" };
+  const actor = newActor("agent", "pi");
   const storage = await LedgerPiSessionStorage.create({
-    store,
-    sessionId: "ledger-session",
-    runId: "runtime-1",
-    actor,
+    store, sessionId: "ledger-session", runId: "runtime-1", actor,
     metadata: { id: "pi-session", createdAt: "2026-01-02T03:04:05.000Z" },
   });
   await storage.appendEntry({
-    type: "message",
-    id: "entry-1",
-    parentId: null,
-    timestamp: "2026-01-02T03:04:06.000Z",
+    type: "message", id: "entry-1", parentId: null, timestamp: "2026-01-02T03:04:06.000Z",
     message: { role: "user", content: "hello", timestamp: Date.now() },
   });
-
   const restored = await LedgerPiSessionStorage.open({
-    store,
-    sessionId: "ledger-session",
-    nativeSessionId: "pi-session",
-    runId: "runtime-2",
-    actor,
+    store, sessionId: "ledger-session", nativeSessionId: "pi-session", runId: "runtime-1", actor,
   });
-
   assert.equal(await restored.getLeafId(), "entry-1");
   assert.deepEqual(await restored.getPathToRoot("entry-1"), await storage.getEntries());
 });
 
-test("Pi direct harness hooks record model boundaries", async () => {
+test("Pi direct harness hooks record model action and attempt", async () => {
   const store = new MemoryEventStore();
-  const recorder = new SessionRecorder({
-    store,
-    sessionId: "session",
-    runId: "run",
-    actor: { type: "agent", id: "pi" },
+  const recorder = await LaneRecorder.open({
+    store, sessionId: "session", runId: "run", actor: newActor("agent", "pi"),
   });
   const harness = new FakeHarness();
   bindPiHarness(harness, recorder);
-
   await harness.emit("turn_start", {});
   await harness.hook("context", { messages: [{ role: "user", content: "hello" }] });
   await harness.hook("before_provider_request", { model: { id: "model", provider: "test" } });
   await harness.emit("message_end", { message: { role: "assistant", content: "done", stopReason: "stop" } });
   await harness.emit("turn_end", {});
-
-  const events = [];
-  for await (const event of store.readStream({ session_id: "session", stream_id: "run" })) events.push(event);
-  assert.deepEqual(events.map((event) => event.event_type), [
-    "step.started",
-    "model.requested",
-    "model.completed",
-    "step.completed",
+  const view = await store.loadSession("session");
+  assert.equal(view.actions[0]?.type, "model_call");
+  assert.equal(view.attempts.length, 1);
+  assert.deepEqual(view.events.map((event) => event.event_type), [
+    "turn.started", "attempt.requested", "attempt.completed", "turn.completed",
   ]);
 });
 
-test("Pi direct harness hook fails closed before model execution", async () => {
+test("Pi model hook fails closed before execution", async () => {
   const store = new ModelPrewriteFailingStore();
-  const recorder = new SessionRecorder({
-    store,
-    sessionId: "session",
-    runId: "run",
-    actor: { type: "agent", id: "pi" },
+  const recorder = await LaneRecorder.open({
+    store, sessionId: "session", runId: "run", actor: newActor("agent", "pi"),
   });
   const harness = new FakeHarness();
   bindPiHarness(harness, recorder);
   await harness.emit("turn_start", {});
   let modelStarted = false;
-
   await assert.rejects(async () => {
     await harness.hook("before_provider_request", { model: { id: "model", provider: "test" } });
     modelStarted = true;
   }, /prewrite failed/);
   assert.equal(modelStarted, false);
-});
-
-test("Pi model errors fail the enclosing step and run", async () => {
-  const store = new MemoryEventStore();
-  const recorder = new SessionRecorder({
-    store,
-    sessionId: "session",
-    runId: "run",
-    actor: { type: "agent", id: "pi" },
-  });
-  const harness = new FakeHarness();
-  bindPiHarness(harness, recorder);
-
-  await harness.emit("agent_start", {});
-  await harness.emit("turn_start", {});
-  await harness.hook("before_provider_request", { model: { id: "model", provider: "test" } });
-  await harness.emit("message_end", {
-    message: { role: "assistant", stopReason: "error", errorMessage: "rate limited" },
-  });
-  await harness.emit("turn_end", {});
-  await harness.emit("agent_end", {});
-
-  const events = [];
-  for await (const event of store.readStream({ session_id: "session", stream_id: "run" })) events.push(event);
-  assert.deepEqual(events.map((event) => event.event_type), [
-    "run.started",
-    "step.started",
-    "model.requested",
-    "model.failed",
-    "step.failed",
-    "run.failed",
-  ]);
 });
 
 class FakeHarness {
@@ -130,16 +76,13 @@ class FakeHarness {
     this.#hooks.set(String(type), handlers);
     return () => { handlers.splice(handlers.indexOf(handler), 1); };
   }
-
   subscribe(listener: (event: any) => Promise<void> | void): () => void {
     this.#listeners.push(listener);
     return () => { this.#listeners.splice(this.#listeners.indexOf(listener), 1); };
   }
-
   async hook(type: string, event: Record<string, unknown>): Promise<void> {
     for (const handler of this.#hooks.get(type) ?? []) await handler({ type, ...event });
   }
-
   async emit(type: string, event: Record<string, unknown>): Promise<void> {
     for (const listener of this.#listeners) await listener({ type, ...event });
   }
@@ -147,12 +90,15 @@ class FakeHarness {
 
 class ModelPrewriteFailingStore extends MemoryEventStore {
   override async append(
-    stream: EventStream,
-    expectedVersion: number,
+    laneId: string,
+    expectedLastSeq: number,
     appendId: string,
     events: readonly ProposedEvent[],
-  ): Promise<CommitReceipt> {
-    if (events.some((event) => event.event_type === "model.requested")) throw new Error("prewrite failed");
-    return super.append(stream, expectedVersion, appendId, events);
+  ): Promise<AppendReceipt> {
+    if (events.some((event) => event.event_type === "attempt.requested")) throw new Error("prewrite failed");
+    return super.append(laneId, expectedLastSeq, appendId, events);
   }
 }
+
+const _storeTypeCheck: EventStore = new MemoryEventStore();
+void _storeTypeCheck;

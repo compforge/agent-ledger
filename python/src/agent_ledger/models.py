@@ -1,19 +1,33 @@
 from __future__ import annotations
 
 import hashlib
+import secrets
+import time
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal, Self
-from uuid import uuid4
+from typing import Any, Literal
+from uuid import UUID
 
 import rfc8785
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SCHEMA_VERSION: Literal["1.0"] = "1.0"
+UUID7_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def new_id() -> str:
+    """Return an RFC 9562 UUIDv7 without requiring a runtime-specific UUID package."""
+    timestamp_ms = int(time.time() * 1000) & ((1 << 48) - 1)
+    value = timestamp_ms << 80
+    value |= 0x7 << 76
+    value |= secrets.randbits(12) << 64
+    value |= 0b10 << 62
+    value |= secrets.randbits(62)
+    return str(UUID(int=value))
 
 
 class EventType(StrEnum):
@@ -23,25 +37,32 @@ class EventType(StrEnum):
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
     RUN_CANCELLED = "run.cancelled"
-    STEP_STARTED = "step.started"
-    STEP_COMPLETED = "step.completed"
-    STEP_FAILED = "step.failed"
-    MODEL_REQUESTED = "model.requested"
-    MODEL_COMPLETED = "model.completed"
-    MODEL_FAILED = "model.failed"
-    TOOL_REQUESTED = "tool.requested"
-    TOOL_COMPLETED = "tool.completed"
-    TOOL_FAILED = "tool.failed"
-    FRAMEWORK_SNAPSHOT_SAVED = "framework.snapshot.saved"
-    FRAMEWORK_CHECKPOINT_LINKED = "framework.checkpoint.linked"
+    LANE_CREATED = "lane.created"
+    TURN_STARTED = "turn.started"
+    TURN_COMPLETED = "turn.completed"
+    TURN_FAILED = "turn.failed"
+    ACTION_STARTED = "action.started"
+    ACTION_COMPLETED = "action.completed"
+    ACTION_FAILED = "action.failed"
+    ATTEMPT_REQUESTED = "attempt.requested"
+    ATTEMPT_COMPLETED = "attempt.completed"
+    ATTEMPT_FAILED = "attempt.failed"
+    LANE_FRAMEWORK_SNAPSHOT_SAVED = "lane.framework.snapshot.saved"
+    LANE_FRAMEWORK_CHECKPOINT_LINKED = "lane.framework.checkpoint.linked"
 
 
 class Actor(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    type: Literal["agent", "orchestrator", "tool", "human", "system"]
-    id: str = Field(min_length=1)
+    id: str = Field(default_factory=new_id, pattern=UUID7_PATTERN)
+    type: str = Field(min_length=1)
     framework: str | None = Field(default=None, min_length=1)
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("created_at")
+    @classmethod
+    def require_created_timezone(cls, value: datetime) -> datetime:
+        return _require_timezone("created_at", value)
 
 
 class ArtifactRef(BaseModel):
@@ -53,100 +74,146 @@ class ArtifactRef(BaseModel):
     content_type: str = Field(min_length=1)
 
 
-class EventStream(BaseModel):
+class Lane(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    id: str = Field(default_factory=new_id, pattern=UUID7_PATTERN)
     session_id: str = Field(min_length=1)
-    stream_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    name: str = Field(default="main", min_length=1)
+    parent_lane_id: str | None = Field(default=None, pattern=UUID7_PATTERN)
+    last_seq: int = Field(default=0, ge=0)
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("created_at")
+    @classmethod
+    def require_created_timezone(cls, value: datetime) -> datetime:
+        return _require_timezone("created_at", value)
+
+
+class Turn(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str = Field(default_factory=new_id, pattern=UUID7_PATTERN)
+    lane_id: str = Field(pattern=UUID7_PATTERN)
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("created_at")
+    @classmethod
+    def require_created_timezone(cls, value: datetime) -> datetime:
+        return _require_timezone("created_at", value)
+
+
+class Action(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str = Field(default_factory=new_id, pattern=UUID7_PATTERN)
+    turn_id: str = Field(pattern=UUID7_PATTERN)
+    type: str = Field(min_length=1)
+    parent_action_id: str | None = Field(default=None, pattern=UUID7_PATTERN)
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("created_at")
+    @classmethod
+    def require_created_timezone(cls, value: datetime) -> datetime:
+        return _require_timezone("created_at", value)
+
+
+class Attempt(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str = Field(default_factory=new_id, pattern=UUID7_PATTERN)
+    action_id: str = Field(pattern=UUID7_PATTERN)
+    attempt_no: int = Field(ge=1)
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("created_at")
+    @classmethod
+    def require_created_timezone(cls, value: datetime) -> datetime:
+        return _require_timezone("created_at", value)
 
 
 class ProposedEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal["1.0"] = SCHEMA_VERSION
-    event_id: str = Field(default_factory=lambda: str(uuid4()), min_length=1)
-    event_type: str = Field(min_length=1)
-    session_id: str = Field(min_length=1)
-    run_id: str = Field(min_length=1)
-    actor: Actor
+    id: str = Field(default_factory=new_id, pattern=UUID7_PATTERN)
+    lane_id: str = Field(pattern=UUID7_PATTERN)
+    subject_id: str = Field(min_length=1)
+    event_type: str = Field(pattern=r"^(session|run|lane|turn|action|attempt)\..+$")
+    actor_id: str = Field(pattern=UUID7_PATTERN)
+    causation_id: str | None = Field(default=None, pattern=UUID7_PATTERN)
     occurred_at: datetime = Field(default_factory=utc_now)
-    step_id: str | None = Field(default=None, min_length=1)
-    attempt_id: str | None = Field(default=None, min_length=1)
-    parent_run_id: str | None = Field(default=None, min_length=1)
-    caused_by_event_id: str | None = Field(default=None, min_length=1)
     payload: dict[str, Any] = Field(default_factory=dict)
     extensions: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("occurred_at")
     @classmethod
-    def require_timezone(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("occurred_at must include a timezone")
-        return value
+    def require_occurred_timezone(cls, value: datetime) -> datetime:
+        return _require_timezone("occurred_at", value)
 
-    @model_validator(mode="after")
-    def validate_causal_parent(self) -> Self:
-        if (self.parent_run_id is None) != (self.caused_by_event_id is None):
-            raise ValueError("parent_run_id and caused_by_event_id must be set together")
-        return self
+    @property
+    def subject_kind(self) -> str:
+        return self.event_type.partition(".")[0]
 
 
 class StoredEvent(ProposedEvent):
-    stream_id: str = Field(min_length=1)
-    stream_version: int = Field(ge=0)
-    commit_cursor: str = Field(min_length=1)
+    seq: int = Field(ge=1)
     committed_at: datetime
 
     @field_validator("committed_at")
     @classmethod
     def require_commit_timezone(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("committed_at must include a timezone")
-        return value
+        return _require_timezone("committed_at", value)
 
     @classmethod
     def from_proposed(
         cls,
         event: ProposedEvent,
         *,
-        stream_id: str,
-        stream_version: int,
-        commit_cursor: str,
+        seq: int,
         committed_at: datetime,
     ) -> StoredEvent:
-        return cls.model_validate(
-            {
-                **event.model_dump(),
-                "stream_id": stream_id,
-                "stream_version": stream_version,
-                "commit_cursor": commit_cursor,
-                "committed_at": committed_at,
-            }
-        )
+        return cls.model_validate({**event.model_dump(), "seq": seq, "committed_at": committed_at})
 
 
-class CommitReceipt(BaseModel):
+class AppendReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    stream: EventStream
-    append_id: str = Field(min_length=1)
+    id: str = Field(pattern=UUID7_PATTERN)
+    lane_id: str = Field(pattern=UUID7_PATTERN)
     digest: str = Field(pattern=r"^[0-9a-f]{64}$")
-    first_version: int = Field(ge=0)
-    last_version: int = Field(ge=0)
-    first_cursor: str = Field(min_length=1)
-    last_cursor: str = Field(min_length=1)
+    first_seq: int = Field(ge=1)
+    last_seq: int = Field(ge=1)
     event_ids: tuple[str, ...] = Field(min_length=1)
     committed_at: datetime
 
     @field_validator("committed_at")
     @classmethod
     def require_commit_timezone(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("committed_at must include a timezone")
-        return value
+        return _require_timezone("committed_at", value)
+
+
+class SessionView(BaseModel):
+    """Read-side snapshot; Session identity remains owned by the upstream orchestrator."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    session_id: str = Field(min_length=1)
+    actors: tuple[Actor, ...] = ()
+    lanes: tuple[Lane, ...] = ()
+    turns: tuple[Turn, ...] = ()
+    actions: tuple[Action, ...] = ()
+    attempts: tuple[Attempt, ...] = ()
+    events: tuple[StoredEvent, ...] = ()
 
 
 def canonical_append_digest(events: list[ProposedEvent] | tuple[ProposedEvent, ...]) -> str:
     body = [event.model_dump(mode="json", exclude_none=True) for event in events]
-    canonical = rfc8785.dumps(body)
-    return hashlib.sha256(canonical).hexdigest()
+    return hashlib.sha256(rfc8785.dumps(body)).hexdigest()
+
+
+def _require_timezone(field: str, value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{field} must include a timezone")
+    return value

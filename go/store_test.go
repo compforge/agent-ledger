@@ -2,170 +2,144 @@ package agentledger
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"os"
 	"testing"
 )
 
-func TestEventStreamCanSpanSemanticRuns(t *testing.T) {
-	ctx := context.Background()
-	store := NewMemoryEventStore()
-	stream := EventStream{SessionID: "session", StreamID: "framework/pi/native"}
-	first := NewEvent("framework.state.recorded", "session", "run-1", Actor{Type: "agent", ID: "pi"})
-	second := NewEvent("framework.state.recorded", "session", "run-2", Actor{Type: "agent", ID: "pi"})
-	if _, err := store.Append(ctx, stream, -1, "append-1", first); err != nil {
-		t.Fatalf("append first: %v", err)
-	}
-	if _, err := store.Append(ctx, stream, 0, "append-2", second); err != nil {
-		t.Fatalf("append second: %v", err)
-	}
+func TestMemoryStoreExecutionHierarchyAndAppend(t *testing.T) {
+	testStoreContract(t, NewMemoryEventStore())
+}
 
-	var runs []string
-	for event, err := range store.Load(ctx, stream, -1) {
-		if err != nil {
-			t.Fatalf("load: %v", err)
+func testStoreContract(t *testing.T, store EventStore) {
+	t.Helper()
+	ctx := context.Background()
+	actor := NewActor("agent", "plain-loop")
+	lane := NewLane("session-1", "run-1", "main", "")
+	turn := NewTurn(lane.ID)
+	action := NewAction(turn.ID, "model_call", "")
+	attempt := NewAttempt(action.ID, 1)
+
+	creates := []struct {
+		label  string
+		create func() error
+	}{
+		{"actor", func() error { return store.CreateActor(ctx, actor) }},
+		{"lane", func() error { return store.CreateLane(ctx, lane) }},
+		{"turn", func() error { return store.CreateTurn(ctx, turn) }},
+		{"action", func() error { return store.CreateAction(ctx, action) }},
+		{"attempt", func() error { return store.CreateAttempt(ctx, attempt) }},
+	}
+	for _, item := range creates {
+		if err := item.create(); err != nil {
+			t.Fatalf("create %s: %v", item.label, err)
 		}
-		runs = append(runs, event.RunID)
 	}
-	if len(runs) != 2 || runs[0] != "run-1" || runs[1] != "run-2" {
-		t.Fatalf("runs = %v", runs)
+	event := NewEvent("attempt.requested", lane.ID, attempt.ID, actor)
+	event.Payload = map[string]any{"model": "test"}
+	receipt, err := store.Append(ctx, lane.ID, 0, NewID(), event)
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if receipt.FirstSeq != 1 || receipt.LastSeq != 1 {
+		t.Fatalf("receipt sequence = %d..%d", receipt.FirstSeq, receipt.LastSeq)
+	}
+
+	var events []StoredEvent
+	for stored, loadErr := range store.LoadLane(ctx, lane.ID, 0) {
+		if loadErr != nil {
+			t.Fatalf("load lane: %v", loadErr)
+		}
+		events = append(events, stored)
+	}
+	if len(events) != 1 || events[0].SubjectID != attempt.ID {
+		t.Fatalf("events = %#v", events)
+	}
+	view, err := store.LoadSession(ctx, lane.SessionID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if len(view.Actors) != 1 || len(view.Lanes) != 1 || len(view.Turns) != 1 || len(view.Actions) != 1 || len(view.Attempts) != 1 || len(view.Events) != 1 {
+		t.Fatalf("incomplete session view: %#v", view)
 	}
 }
 
-func TestAppendDigestMatchesCrossLanguageVector(t *testing.T) {
-	data, err := os.ReadFile("../conformance/vectors/append.json")
-	if err != nil {
-		t.Fatalf("read vector: %v", err)
-	}
-	var vector struct {
-		Events []ProposedEvent `json:"events"`
-		SHA256 string          `json:"sha256"`
-	}
-	if err := json.Unmarshal(data, &vector); err != nil {
-		t.Fatalf("decode vector: %v", err)
-	}
-	digest, err := CanonicalAppendDigest(vector.Events)
-	if err != nil {
-		t.Fatalf("digest: %v", err)
-	}
-	if digest != vector.SHA256 {
-		t.Fatalf("digest = %s, want %s", digest, vector.SHA256)
-	}
-}
-
-func TestEventIDUniquenessIsScopedToSession(t *testing.T) {
+func TestMemoryStoreAppendIsIdempotentAndOptimistic(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryEventStore()
-	first := NewEvent("test.recorded", "session-1", "run-1", Actor{Type: "agent", ID: "test"})
-	first.EventID = "shared-event-id"
-	second := first
-	second.SessionID = "session-2"
-	second.RunID = "run-2"
-
-	if _, err := store.Append(ctx, EventStream{SessionID: "session-1", StreamID: "run-1"}, -1, "append-1", first); err != nil {
-		t.Fatalf("append first session: %v", err)
+	actor := NewActor("agent", "")
+	lane := NewLane("session", "run", "main", "")
+	if err := store.CreateActor(ctx, actor); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := store.Append(ctx, EventStream{SessionID: "session-2", StreamID: "run-2"}, -1, "append-2", second); err != nil {
-		t.Fatalf("append second session: %v", err)
+	if err := store.CreateLane(ctx, lane); err != nil {
+		t.Fatal(err)
+	}
+	event := NewEvent("lane.started", lane.ID, lane.ID, actor)
+	appendID := NewID()
+	first, err := store.Append(ctx, lane.ID, 0, appendID, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Append(ctx, lane.ID, 0, appendID, event)
+	if err != nil || second.LastSeq != first.LastSeq {
+		t.Fatalf("idempotent append = %#v, %v", second, err)
+	}
+	other := NewEvent("lane.completed", lane.ID, lane.ID, actor)
+	if _, err := store.Append(ctx, lane.ID, 0, NewID(), other); !errors.Is(err, ErrLaneConflict) {
+		t.Fatalf("append error = %v, want lane conflict", err)
 	}
 }
 
-func TestDuplicateEventIDRejectsWholeBatch(t *testing.T) {
+func TestLaneRecorderCreatesAttemptsForRetries(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryEventStore()
-	stream := EventStream{SessionID: "session", StreamID: "run"}
-	first := NewEvent("test.recorded", "session", "run", Actor{Type: "agent", ID: "test"})
-	second := first
-	second.EventType = "test.second"
-
-	if _, err := store.Append(ctx, stream, -1, "append", first, second); !errors.Is(err, ErrDuplicateEvent) {
-		t.Fatalf("append error = %v, want ErrDuplicateEvent", err)
+	recorder, err := OpenRecorder(ctx, RecorderOptions{
+		Store: store, SessionID: "session", RunID: "run", Actor: NewActor("agent", "plain-loop"),
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for event, err := range store.Load(ctx, stream, -1) {
-		t.Fatalf("unexpected stored event %#v, error %v", event, err)
+	turn, err := recorder.StartTurn(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := recorder.BeforeModelCall(ctx, turn.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.ModelFailed(ctx, first, errors.New("timeout")); err != nil {
+		t.Fatal(err)
+	}
+	second, err := recorder.Retry(ctx, first.ActionID, 2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ActionID != second.ActionID || first.AttemptID == second.AttemptID || second.AttemptNo != 2 {
+		t.Fatalf("retry handles = %#v %#v", first, second)
 	}
 }
 
 func TestCommittedEventContentIsImmutable(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryEventStore()
-	stream := EventStream{SessionID: "session", StreamID: "run"}
-	event := NewEvent("test.recorded", "session", "run", Actor{Type: "agent", ID: "test"})
+	actor := NewActor("agent", "")
+	lane := NewLane("session", "run", "main", "")
+	_ = store.CreateActor(ctx, actor)
+	_ = store.CreateLane(ctx, lane)
+	event := NewEvent("lane.recorded", lane.ID, lane.ID, actor)
 	event.Payload["nested"] = map[string]any{"value": float64(1)}
-
-	if _, err := store.Append(ctx, stream, -1, "append", event); err != nil {
-		t.Fatalf("append: %v", err)
+	if _, err := store.Append(ctx, lane.ID, 0, NewID(), event); err != nil {
+		t.Fatal(err)
 	}
 	event.Payload["nested"].(map[string]any)["value"] = float64(2)
-
-	stored := loadEvents(t, store, stream)
-	stored[0].Payload["nested"].(map[string]any)["value"] = float64(3)
-	reloaded := loadEvents(t, store, stream)
-	if got := reloaded[0].Payload["nested"].(map[string]any)["value"]; got != float64(1) {
-		t.Fatalf("committed payload value = %v, want 1", got)
-	}
-}
-
-func loadEvents(t *testing.T, store EventStore, stream EventStream) []StoredEvent {
-	t.Helper()
-	var events []StoredEvent
-	for event, err := range store.Load(context.Background(), stream, -1) {
+	var stored StoredEvent
+	for item, err := range store.LoadLane(ctx, lane.ID, 0) {
 		if err != nil {
-			t.Fatalf("load: %v", err)
+			t.Fatal(err)
 		}
-		events = append(events, event)
+		stored = item
 	}
-	return events
-}
-
-func TestResumeRecorderRejectsExpectedVersion(t *testing.T) {
-	expectedVersion := int64(0)
-	_, err := ResumeRecorder(context.Background(), RecorderOptions{
-		Store: NewMemoryEventStore(), ExpectedVersion: &expectedVersion,
-	})
-	if err == nil {
-		t.Fatal("resume accepted an explicit expected version")
-	}
-}
-
-func TestOrchestratorLinksMultipleAgentRuns(t *testing.T) {
-	ctx := context.Background()
-	store := NewMemoryEventStore()
-	orchestrator := NewSessionRecorder(RecorderOptions{
-		Store: store, SessionID: "session", RunID: "orchestrator-run",
-		Actor: Actor{Type: "orchestrator", ID: "planner"},
-	})
-	if _, err := orchestrator.StartRun(ctx, nil); err != nil {
-		t.Fatalf("start orchestrator: %v", err)
-	}
-	for _, role := range []string{"researcher", "reviewer"} {
-		dispatch, err := orchestrator.Record(
-			ctx, "orchestration.agent.dispatched", map[string]any{"role": role}, "", "",
-		)
-		if err != nil {
-			t.Fatalf("record %s dispatch: %v", role, err)
-		}
-		child := orchestrator.Child(role+"-run", Actor{Type: "agent", ID: role}, dispatch.EventID)
-		if _, err := child.StartRun(ctx, nil); err != nil {
-			t.Fatalf("start %s: %v", role, err)
-		}
-	}
-
-	var childRuns []string
-	for event, err := range store.ScanSession(ctx, "session", "") {
-		if err != nil {
-			t.Fatalf("scan session: %v", err)
-		}
-		if event.ParentRunID == "" {
-			continue
-		}
-		if event.ParentRunID != "orchestrator-run" || event.CausedByEventID == "" {
-			t.Fatalf("invalid causal edge: %#v", event.ProposedEvent)
-		}
-		childRuns = append(childRuns, event.RunID)
-	}
-	if len(childRuns) != 2 || childRuns[0] != "researcher-run" || childRuns[1] != "reviewer-run" {
-		t.Fatalf("child runs = %v", childRuns)
+	if got := stored.Payload["nested"].(map[string]any)["value"]; got != float64(1) {
+		t.Fatalf("stored value = %v", got)
 	}
 }

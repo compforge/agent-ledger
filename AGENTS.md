@@ -2,74 +2,73 @@
 
 ## 项目定位与边界
 
-Agent Ledger 是一套框架无关的 Agent 执行事实规范，以及围绕该规范实现的多语言 SDK 与框架
-适配器。Agent Loop 和 Orchestrator 可以向同一个 Session 写入不可变事件，供恢复、全局
-Timeline、轨迹分析和评测等下游用途消费。
+Agent Ledger 是框架无关的 Agent 执行账本规范，以及遵守该规范的多语言 SDK 和 Harness
+Adapter。它记录不可变执行事实，用于安全恢复、审计、轨迹提取和评测。
 
-- 稳定产品是 `spec/` 中的协议；语言 SDK 保持轻量，框架差异主要由 Adapter 承担。
-- Ledger 只拥有“发生过什么”的事实，不拥有具体 Agent Loop、编排状态机、调度、Memory、
-  Eval 或能力更新策略。
-- 恢复由理解框架原生上下文、checkpoint 和 resume API 的 Adapter 完成；Core 不构造通用
+- 稳定产品是 `spec/` 的协议；各语言 Core 保持同构，框架差异由 Adapter 承担。
+- Ledger 拥有“发生过什么”，不拥有 Agent Loop、编排控制状态、调度、Memory、Eval 或策略激活。
+- Harness 原生状态及其 checkpoint/resume 语义由 Harness 和 Adapter 共同拥有；Core 不构造通用
   `RunContext`。
-- V1 不要求 Collector 或网络服务。应用直接注入内存、Redis 或数据库 `EventStore`。
+- V1 不要求 Collector 或网络服务。应用直接注入 Memory、Redis、Bolt 或关系型 `EventStore`。
 
 ## 代码地图与核心模块
 
 ```text
 .
 ├── spec/                         # 协议的唯一规范来源
-│   ├── rfcs/                     # 追加语义、Adapter 能力与恢复边界
-│   └── schemas/                  # Event envelope 与 Adapter descriptor
-├── conformance/                  # 跨语言 canonical encoding、digest 与契约向量
-├── python/                       # Python Core、Store、投影与 plain-loop 参考实现
+│   ├── rfcs/                     # 对象、追加、Adapter 与恢复边界
+│   └── schemas/                  # Event、Adapter descriptor 与参考 SQL
+├── conformance/                  # 跨语言 canonical encoding 与 digest 向量
+├── python/                       # Python Core；Memory、Redis、SQLAlchemy Stores
 ├── typescript/
 │   └── packages/
 │       ├── core/                 # TypeScript Core 与 Memory Store
-│       └── pi/                   # Pi hooks 与 lossless native SessionStorage
-└── go/                           # Go Core、Store 与公共 Recorder API
-    ├── adapters/
-    │   └── agentgo/              # AgentGo hooks 与原生恢复适配
+│       └── pi/                   # Pi hooks 与原生 SessionStorage Lane
+└── go/                           # Go Core 与公共 LaneRecorder
+    ├── adapters/agentgo/         # AgentGo 记录与原生恢复适配
     └── stores/
-        └── bolt/                 # 单文件持久化 EventStore
+        ├── bolt/                 # 单文件 KV Store
+        └── gorm/                 # 可注入 MySQL/SQLite 等 driver 的关系型 Store
 ```
 
 ## 核心模型与关键约定
 
-1. `Session` 是端到端任务及全局 Timeline 的边界，不等同于任一框架的 chat/session 对象。
-2. `Run` 是 Agent 或 Orchestrator 的一次语义执行；`EventStream` 是独立的物理 OCC 追加分区。
-   两者不能合并，否则框架原生状态无法跨进程替换或多个 runtime run 延续。
-3. `Step` 表示可跨重试的逻辑工作，`Attempt` 表示一次真实模型或工具调用。重试沿用
-   `step_id`，但必须生成新的 `attempt_id`。
-4. 分布式执行关系由 `parent_run_id` 与 `caused_by_event_id` 表达。时间戳和
-   `commit_cursor` 只用于观察与分页，不能建立因果或全局执行顺序。
-5. 严格 Adapter 必须在外部模型或工具调用前等待 requested 事件持久化，并在 Loop 前进前写入
-   completed/failed。只有 requested、没有终态的 Attempt 是待协调事实，不能静默重放有副作用的
-   工具。
-6. Normalized events 服务跨框架观察和分析；framework-native records 服务无损恢复。Pi 的 entry
-   tree、active leaf 等语义只属于 Pi Adapter，不能提升为 Core Session 模型。
-7. Store 追加必须保持原子批次、canonical-content 幂等、乐观并发和 Session 内 event ID 唯一。
-   Store 不负责 run ownership、lease、fencing 或调度。
-8. Reader 必须保留未知事件类型、payload 字段与 extensions；同一 major schema 内只做兼容性
-   扩展。
+1. 层级固定为 `Session → Run → Lane → Turn → Action → Attempt`。Session 和 Run ID 由上游提供；
+   Ledger 不创建权威 Session/Run 行。
+2. Lane 是 Run 内的串行链路，也是 OCC 与 `seq` 的边界。一个 Run 可有 main、分支和
+   framework-native Lanes；跨 Lane 顺序只用于观察。
+3. Turn 是稳定交互边界；Action 是 `model_call`、`tool_call`、`compact` 等逻辑动作；Attempt
+   是一次物理尝试。重试沿用 Action，并递增 `attempt_no`。
+4. Actor、Lane、Turn、Action、Attempt、Event 和 append ID 使用 UUIDv7。业务表只表达不可变身份
+   和从属关系；生命周期、输入、输出和失败均表达为 Event。
+5. Event 的 `event_type` 前缀决定 `subject_id` 的类型；`causation_id` 表达因果。时间戳、UUIDv7
+   和 Session 投影顺序都不能替代因果关系。
+6. 严格 Adapter 必须在模型或工具调用前持久化 `attempt.requested`，在 Loop 前进前写入
+   `attempt.completed` 或 `attempt.failed`。未决副作用工具不能静默重试。
+7. normalized Events 服务跨框架审计和分析；framework-native Lane/Checkpoint 服务无损恢复。
+   Pi entry tree 等私有语义不能提升为 Core 模型。
+8. Store 保证原子批次、canonical-content 幂等、Lane OCC、全局 Event/append ID 唯一以及不可变
+   归属校验。SQL 不声明外键，关系由 Store 维护。
+9. Reader 必须保留未知 Event type、payload 与 extensions；同一 major schema 内只做兼容扩展。
 
 ## 开发约定
 
-- 修改 Event envelope 或追加契约时，同步检查 JSON Schema、RFC、跨语言类型、canonical digest
-  向量和 Store contract tests，避免各语言形成隐式方言。
-- 新增框架能力优先放入独立 Adapter；只有能跨框架保持相同语义和约束的事实才进入 Core。
-- Adapter 的 capability descriptor 必须描述实际安装后的保证。不能把 telemetry-only hook 标成
-  strict，也不能用 normalized events 冒充 lossless native state。
-- 大输入输出通过 `ArtifactRef` 引用，业务选择的 Artifact Store 保存内容；不要把大对象直接
-  塞入事件流。
-- 仓库公开发布，提交内容不得包含公司内部链接、标识、凭据、个人机器路径或仅适用于内部环境的
-  约定。
-- 开发和验证入口统一使用根目录 `Makefile`；更细的环境与命令说明以 README 为准。
+- 修改对象模型或 append 契约时，同步检查 JSON Schema、RFC、参考 SQL、跨语言类型、digest
+  向量和 Store contract tests。
+- 新 Harness 能力优先放入独立 Adapter；只有跨 Harness 语义和约束一致的事实才进入 Core。
+- Adapter capability 必须描述实际保证，不能把 telemetry-only hook 标记为 strict。
+- Python 关系型 Store 使用 SQLAlchemy；Go 关系型 Store 使用 GORM。连接、driver、连接池和超时由
+  应用显式注入；测试可用 SQLite，协议不得绑定具体数据库方言。
+- 大输入输出通过 `ArtifactRef` 引用；Artifact Store 保存内容，不把大对象塞进 Event。
+- 仓库公开发布，禁止提交内部链接、标识、凭据、个人机器路径或仅适用于内部环境的约定。
+- 开发和验证入口统一使用根 `Makefile`。
 
 ## References
 
 - `README.md` — 使用者视角的项目定位、模型和最短开发入口
 - `spec/rfcs/0001-agent-ledger.md` — Ledger 核心契约、因果模型与读侧投影
 - `spec/rfcs/0002-polyglot-adapters.md` — 多语言 Adapter、能力声明与恢复边界
-- `spec/schemas/event.schema.json` — 规范化事件 envelope
+- `spec/schemas/event.schema.json` — Event envelope
+- `spec/schemas/mysql.sql` — 无外键的参考关系型 Schema
 - `spec/schemas/adapter.schema.json` — Adapter descriptor
 - `conformance/README.md` — 跨语言一致性要求

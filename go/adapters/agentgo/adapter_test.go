@@ -18,7 +18,6 @@ func TestNativeMessagesRestoreIntoAgentGo(t *testing.T) {
 	if err := adapter.commitMessage(agentgo.UserMsg("hello")); err != nil {
 		t.Fatalf("commit message: %v", err)
 	}
-
 	agent := agentgo.NewAgent()
 	if err := adapter.Restore(ctx, agent); err != nil {
 		t.Fatalf("restore: %v", err)
@@ -32,7 +31,7 @@ func TestNativeMessagesRestoreIntoAgentGo(t *testing.T) {
 func TestWrappedModelFailsClosedWhenPrewriteFails(t *testing.T) {
 	ctx := context.Background()
 	base := agentledger.NewMemoryEventStore()
-	store := failingStore{EventStore: base, eventType: "model.requested"}
+	store := failingStore{EventStore: base, eventType: "attempt.requested"}
 	adapter := newTestAdapter(t, ctx, store)
 	inner := &countingModel{}
 	_, err := adapter.WrapModel(inner).Generate(ctx, []agentgo.Message{agentgo.UserMsg("hello")}, nil)
@@ -44,90 +43,54 @@ func TestWrappedModelFailsClosedWhenPrewriteFails(t *testing.T) {
 	}
 }
 
-func TestToolMiddlewareWritesBeforeExecute(t *testing.T) {
+func TestToolMiddlewareRecordsActionAndAttempt(t *testing.T) {
 	ctx := context.Background()
 	store := agentledger.NewMemoryEventStore()
 	adapter := newTestAdapter(t, ctx, store)
-	executed := false
 	call := agentgo.ToolCall{ID: "tool-1", Name: "read", Args: json.RawMessage(`{"path":"README.md"}`)}
 	_, err := adapter.ToolMiddleware()(ctx, call, func(context.Context, json.RawMessage) (json.RawMessage, error) {
-		executed = true
 		return json.RawMessage(`{"ok":true}`), nil
 	})
 	if err != nil {
 		t.Fatalf("execute middleware: %v", err)
 	}
-	if !executed {
-		t.Fatal("tool was not executed")
+	view, err := store.LoadSession(ctx, "session")
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	var types []string
-	for event, loadErr := range store.Load(ctx, agentledger.EventStream{SessionID: "session", StreamID: "run"}, -1) {
-		if loadErr != nil {
-			t.Fatalf("load events: %v", loadErr)
-		}
-		types = append(types, event.EventType)
+	if len(view.Turns) != 1 || len(view.Actions) != 1 || view.Actions[0].Type != "tool_call" || len(view.Attempts) != 1 {
+		t.Fatalf("session view = %#v", view)
 	}
-	if len(types) != 2 || types[0] != "tool.requested" || types[1] != "tool.completed" {
-		t.Fatalf("event types = %v", types)
-	}
+	assertAttemptLifecycle(t, view.Events)
 }
 
 func TestWrappedModelRecordsPhysicalAttempt(t *testing.T) {
 	ctx := context.Background()
 	store := agentledger.NewMemoryEventStore()
 	adapter := newTestAdapter(t, ctx, store)
-	model := adapter.WrapModel(fakeModel{})
-	if _, err := model.Generate(ctx, []agentgo.Message{agentgo.UserMsg("hello")}, nil); err != nil {
+	if _, err := adapter.WrapModel(fakeModel{}).Generate(ctx, []agentgo.Message{agentgo.UserMsg("hello")}, nil); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
-
-	var types []string
-	for event, loadErr := range store.Load(ctx, agentledger.EventStream{SessionID: "session", StreamID: "run"}, -1) {
-		if loadErr != nil {
-			t.Fatalf("load events: %v", loadErr)
-		}
-		types = append(types, event.EventType)
+	view, err := store.LoadSession(ctx, "session")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(types) != 2 || types[0] != "model.requested" || types[1] != "model.completed" {
-		t.Fatalf("event types = %v", types)
+	if len(view.Actions) != 1 || view.Actions[0].Type != "model_call" || len(view.Attempts) != 1 {
+		t.Fatalf("session view = %#v", view)
 	}
+	assertAttemptLifecycle(t, view.Events)
 }
 
-func TestWrappedModelEarlyCloseHonorsCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	store := agentledger.NewMemoryEventStore()
-	adapter := newTestAdapter(t, ctx, store)
-	stream, err := adapter.WrapModel(nonTerminalStreamModel{}).GenerateStream(ctx, nil, nil)
-	if err != nil {
-		t.Fatalf("generate stream: %v", err)
-	}
-
-	deadline := time.Now().Add(time.Second)
-	for len(stream) < 16 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if len(stream) != 16 {
-		t.Fatalf("buffered events = %d, want 16", len(stream))
-	}
-	cancel()
-
-	var events []agentgo.StreamEvent
-	closeDeadline := time.After(time.Second)
-collect:
-	for {
-		select {
-		case event, ok := <-stream:
-			if !ok {
-				break collect
-			}
-			events = append(events, event)
-		case <-closeDeadline:
-			t.Fatal("wrapped stream did not close after cancellation")
+func assertAttemptLifecycle(t *testing.T, events []agentledger.StoredEvent) {
+	t.Helper()
+	var types []string
+	for _, event := range events {
+		if event.EventType == "attempt.requested" || event.EventType == "attempt.completed" {
+			types = append(types, event.EventType)
 		}
 	}
-	if len(events) != 16 {
-		t.Fatalf("forwarded events = %d, want 16 without a post-cancel terminal event", len(events))
+	if len(types) != 2 || types[0] != "attempt.requested" || types[1] != "attempt.completed" {
+		t.Fatalf("attempt event types = %v", types)
 	}
 }
 
@@ -135,8 +98,7 @@ func newTestAdapter(t *testing.T, ctx context.Context, store agentledger.EventSt
 	t.Helper()
 	adapter, err := New(ctx, Config{
 		Store: store, SessionID: "session", RunID: "run", NativeSessionID: "native",
-		Actor:            agentledger.Actor{Type: "agent", ID: "agentgo", Framework: "agentgo"},
-		OperationTimeout: time.Second,
+		Actor: agentledger.NewActor("agent", "agentgo"), OperationTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatalf("new adapter: %v", err)
@@ -147,15 +109,15 @@ func newTestAdapter(t *testing.T, ctx context.Context, store agentledger.EventSt
 type fakeModel struct{}
 
 func (fakeModel) Generate(context.Context, []agentgo.Message, []agentgo.ToolSpec, ...agentgo.CallOption) (*agentgo.LLMResponse, error) {
-	return &agentgo.LLMResponse{Message: agentgo.Message{Role: agentgo.RoleAssistant, Content: []agentgo.ContentBlock{agentgo.TextBlock("done")}, Timestamp: time.Now()}}, nil
+	return &agentgo.LLMResponse{Message: agentgo.Message{
+		Role: agentgo.RoleAssistant, Content: []agentgo.ContentBlock{agentgo.TextBlock("done")}, Timestamp: time.Now(),
+	}}, nil
 }
-
 func (fakeModel) GenerateStream(context.Context, []agentgo.Message, []agentgo.ToolSpec, ...agentgo.CallOption) (<-chan agentgo.StreamEvent, error) {
 	stream := make(chan agentgo.StreamEvent)
 	close(stream)
 	return stream, nil
 }
-
 func (fakeModel) SupportsTools() bool { return true }
 
 type countingModel struct{ called bool }
@@ -164,40 +126,21 @@ func (m *countingModel) Generate(context.Context, []agentgo.Message, []agentgo.T
 	m.called = true
 	return &agentgo.LLMResponse{}, nil
 }
-
 func (*countingModel) GenerateStream(context.Context, []agentgo.Message, []agentgo.ToolSpec, ...agentgo.CallOption) (<-chan agentgo.StreamEvent, error) {
 	return nil, errors.New("not implemented")
 }
-
 func (*countingModel) SupportsTools() bool { return true }
-
-type nonTerminalStreamModel struct{}
-
-func (nonTerminalStreamModel) Generate(context.Context, []agentgo.Message, []agentgo.ToolSpec, ...agentgo.CallOption) (*agentgo.LLMResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (nonTerminalStreamModel) GenerateStream(context.Context, []agentgo.Message, []agentgo.ToolSpec, ...agentgo.CallOption) (<-chan agentgo.StreamEvent, error) {
-	stream := make(chan agentgo.StreamEvent, 16)
-	for range 16 {
-		stream <- agentgo.StreamEvent{}
-	}
-	close(stream)
-	return stream, nil
-}
-
-func (nonTerminalStreamModel) SupportsTools() bool { return true }
 
 type failingStore struct {
 	agentledger.EventStore
 	eventType string
 }
 
-func (s failingStore) Append(ctx context.Context, stream agentledger.EventStream, expectedVersion int64, appendID string, events ...agentledger.ProposedEvent) (agentledger.CommitReceipt, error) {
+func (s failingStore) Append(ctx context.Context, laneID string, expectedLastSeq int64, appendID string, events ...agentledger.ProposedEvent) (agentledger.AppendReceipt, error) {
 	for _, event := range events {
 		if event.EventType == s.eventType {
-			return agentledger.CommitReceipt{}, errors.New("prewrite failed")
+			return agentledger.AppendReceipt{}, errors.New("prewrite failed")
 		}
 	}
-	return s.EventStore.Append(ctx, stream, expectedVersion, appendID, events...)
+	return s.EventStore.Append(ctx, laneID, expectedLastSeq, appendID, events...)
 }

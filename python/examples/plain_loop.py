@@ -1,32 +1,28 @@
 import asyncio
 
-from agent_ledger import Actor, SessionRecorder
+from agent_ledger import Actor, LaneRecorder
 from agent_ledger.frameworks.plain_loop import PlainLoopContext, PlainLoopProfile
 from agent_ledger.stores.memory import MemoryEventStore
 
 
 async def main() -> None:
     store = MemoryEventStore()
-    actor = Actor(type="agent", id="example", framework="plain-loop")
-    recorder = SessionRecorder(
+    recorder = await LaneRecorder.open(
         store=store,
         session_id="session-1",
         run_id="run-1",
-        actor=actor,
+        actor=Actor(type="agent", framework="plain-loop"),
     )
     profile = PlainLoopProfile()
 
     await recorder.start_run(payload={"messages": [{"role": "user", "content": "hello"}]})
-    await recorder.start_step("step-1")
-    attempt = await recorder.before_model_call(
-        "step-1",
-        payload={"model": "example-model"},
-    )
+    turn = await recorder.start_turn()
+    attempt = await recorder.before_model_call(turn, payload={"model": "example-model"})
     await recorder.model_completed(
         attempt,
         payload={"message": {"role": "assistant", "content": "Hello!"}},
     )
-    await recorder.complete_step("step-1")
+    await recorder.complete_turn(turn)
     await profile.save(
         recorder,
         PlainLoopContext(
@@ -34,12 +30,12 @@ async def main() -> None:
                 {"role": "user", "content": "hello"},
                 {"role": "assistant", "content": "Hello!"},
             ],
-            completed_steps=["step-1"],
+            completed_turns=[turn.id],
         ),
     )
 
-    events = [event async for event in store.read_stream(recorder.stream)]
-    recovered = profile.recover(events)
+    view = await store.load_session(recorder.session_id)
+    recovered = profile.recover(view, recorder.lane.id)
     print(recovered.context.model_dump())
 
 

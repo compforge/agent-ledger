@@ -13,17 +13,11 @@ import (
 )
 
 var Descriptor = agentledger.AdapterDescriptor{
-	SchemaVersion:    "1.0",
-	AdapterID:        "agentgo",
-	AdapterVersion:   "1",
-	Framework:        "agentgo",
-	FrameworkVersion: ">=0.0.1 <1",
+	SchemaVersion: "1.0", AdapterID: "agentgo", AdapterVersion: "1",
+	Framework: "agentgo", FrameworkVersion: ">=0.0.1 <1",
 	Capabilities: agentledger.AdapterCapabilities{
-		ModelPrewrite:        "strict",
-		ToolPrewrite:         "strict",
-		OutcomeGate:          "strict",
-		Recovery:             "native_store",
-		PreservesNativeState: true,
+		ModelPrewrite: "strict", ToolPrewrite: "strict", OutcomeGate: "strict",
+		Recovery: "native_store", PreservesNativeState: true,
 	},
 }
 
@@ -45,15 +39,15 @@ type Config struct {
 }
 
 type Adapter struct {
-	runtimeRecorder *agentledger.SessionRecorder
-	stateRecorder   *agentledger.SessionRecorder
+	runtimeRecorder *agentledger.LaneRecorder
+	stateRecorder   *agentledger.LaneRecorder
 	codec           MessageCodec
 	timeout         time.Duration
 	beforeTurn      agentgo.BeforeTurnHook
 	afterTurn       agentgo.AfterTurnHook
 
 	mu          sync.Mutex
-	currentStep string
+	currentTurn string
 }
 
 func New(ctx context.Context, config Config) (*Adapter, error) {
@@ -71,26 +65,23 @@ func New(ctx context.Context, config Config) (*Adapter, error) {
 	if nativeSessionID == "" {
 		nativeSessionID = config.SessionID
 	}
-	runtimeRecorder, err := agentledger.ResumeRecorder(ctx, agentledger.RecorderOptions{
-		Store: config.Store, SessionID: config.SessionID, RunID: config.RunID, Actor: config.Actor,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("resume agentgo runtime recorder: %w", err)
-	}
-	stateRecorder, err := agentledger.ResumeRecorder(ctx, agentledger.RecorderOptions{
+	runtimeRecorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
 		Store: config.Store, SessionID: config.SessionID, RunID: config.RunID,
-		StreamID: "framework/agentgo/" + nativeSessionID, Actor: config.Actor,
+		LaneName: "main", Actor: config.Actor,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("resume agentgo state recorder: %w", err)
+		return nil, fmt.Errorf("open agentgo runtime recorder: %w", err)
+	}
+	stateRecorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
+		Store: config.Store, SessionID: config.SessionID, RunID: config.RunID,
+		LaneName: "framework/agentgo/" + nativeSessionID, Actor: config.Actor,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open agentgo state recorder: %w", err)
 	}
 	return &Adapter{
-		runtimeRecorder: runtimeRecorder,
-		stateRecorder:   stateRecorder,
-		codec:           codec,
-		timeout:         config.OperationTimeout,
-		beforeTurn:      config.BeforeTurn,
-		afterTurn:       config.AfterTurn,
+		runtimeRecorder: runtimeRecorder, stateRecorder: stateRecorder, codec: codec,
+		timeout: config.OperationTimeout, beforeTurn: config.BeforeTurn, afterTurn: config.AfterTurn,
 	}, nil
 }
 
@@ -112,10 +103,12 @@ func (a *Adapter) WrapModel(model agentgo.ChatModel) agentgo.ChatModel {
 
 func (a *Adapter) ToolMiddleware() agentgo.ToolMiddleware {
 	return func(ctx context.Context, call agentgo.ToolCall, next agentgo.ToolExecuteFunc) (json.RawMessage, error) {
-		attempt, err := a.runtimeRecorder.BeforeToolCall(ctx, a.stepID(), map[string]any{
-			"tool_call_id": call.ID,
-			"tool_name":    call.Name,
-			"arguments":    string(call.Args),
+		turnID, err := a.turnID(ctx)
+		if err != nil {
+			return nil, err
+		}
+		attempt, err := a.runtimeRecorder.BeforeToolCall(ctx, turnID, map[string]any{
+			"tool_call_id": call.ID, "tool_name": call.Name, "arguments": string(call.Args),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("record agentgo tool request: %w", err)
@@ -135,7 +128,6 @@ func (a *Adapter) ToolMiddleware() agentgo.ToolMiddleware {
 }
 
 // Restore replaces an idle AgentGo transcript with its last durably committed prefix.
-// Do not call it from an AgentGo event listener: HoldRuns waits for the active run to drain.
 func (a *Adapter) Restore(ctx context.Context, agent *agentgo.Agent) error {
 	release := agent.HoldRuns()
 	defer release()
@@ -166,10 +158,9 @@ func (a *Adapter) commitMessage(message agentgo.AgentMessage) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), a.timeout)
 	defer cancel()
-	_, err = a.stateRecorder.Record(ctx, "framework.agentgo.message.committed", map[string]any{
-		"message_type": kind,
-		"message_json": string(data),
-	}, "", "")
+	_, err = a.stateRecorder.Record(ctx, "lane.framework.agentgo.message.committed", a.stateRecorder.Lane().ID, map[string]any{
+		"message_type": kind, "message_json": string(data),
+	}, "")
 	if err != nil {
 		return fmt.Errorf("persist agentgo message: %w", err)
 	}
@@ -177,10 +168,11 @@ func (a *Adapter) commitMessage(message agentgo.AgentMessage) error {
 }
 
 func (a *Adapter) handleBeforeTurn(ctx context.Context, turn agentgo.BeforeTurnContext) ([]agentgo.AgentMessage, error) {
-	stepID := a.nextStep()
-	if _, err := a.runtimeRecorder.Record(ctx, "step.started", map[string]any{"turn": turn.TurnIndex}, stepID, ""); err != nil {
-		return nil, fmt.Errorf("record agentgo step start: %w", err)
+	created, err := a.runtimeRecorder.StartTurn(ctx, map[string]any{"turn": turn.TurnIndex})
+	if err != nil {
+		return nil, fmt.Errorf("record agentgo turn start: %w", err)
 	}
+	a.setTurn(created.ID)
 	if a.beforeTurn != nil {
 		return a.beforeTurn(ctx, turn)
 	}
@@ -188,30 +180,32 @@ func (a *Adapter) handleBeforeTurn(ctx context.Context, turn agentgo.BeforeTurnC
 }
 
 func (a *Adapter) handleAfterTurn(ctx context.Context, turn agentgo.AfterTurnContext) error {
-	stepID := a.stepID()
+	turnID, err := a.turnID(ctx)
+	if err != nil {
+		return err
+	}
 	if a.afterTurn != nil {
 		if err := a.afterTurn(ctx, turn); err != nil {
-			_, recordErr := a.runtimeRecorder.Record(ctx, "step.failed", map[string]any{"error": err.Error()}, stepID, "")
-			if recordErr != nil {
-				return fmt.Errorf("agentgo after-turn failed: %v; record step failure: %w", err, recordErr)
+			if _, recordErr := a.runtimeRecorder.FailTurn(ctx, turnID, err); recordErr != nil {
+				return fmt.Errorf("agentgo after-turn failed: %v; record turn failure: %w", err, recordErr)
 			}
 			return err
 		}
 	}
-	if _, err := a.runtimeRecorder.Record(ctx, "step.completed", map[string]any{"turn": turn.TurnIndex}, stepID, ""); err != nil {
-		return fmt.Errorf("record agentgo step completion: %w", err)
+	if _, err := a.runtimeRecorder.CompleteTurn(ctx, turnID, map[string]any{"turn": turn.TurnIndex}); err != nil {
+		return fmt.Errorf("record agentgo turn completion: %w", err)
 	}
-	a.clearStep()
+	a.clearTurn()
 	return nil
 }
 
 func (a *Adapter) loadMessages(ctx context.Context) ([]agentgo.AgentMessage, error) {
 	var messages []agentgo.AgentMessage
-	for event, err := range a.stateRecorder.Store().Load(ctx, a.stateRecorder.Stream(), -1) {
+	for event, err := range a.stateRecorder.Store().LoadLane(ctx, a.stateRecorder.Lane().ID, 0) {
 		if err != nil {
 			return nil, fmt.Errorf("load agentgo native state: %w", err)
 		}
-		if event.EventType != "framework.agentgo.message.committed" {
+		if event.EventType != "lane.framework.agentgo.message.committed" {
 			continue
 		}
 		kind, ok := event.Payload["message_type"].(string)
@@ -231,26 +225,30 @@ func (a *Adapter) loadMessages(ctx context.Context) ([]agentgo.AgentMessage, err
 	return messages, nil
 }
 
-func (a *Adapter) nextStep() string {
+func (a *Adapter) turnID(ctx context.Context) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.currentStep = agentledger.NewID()
-	return a.currentStep
-}
-
-func (a *Adapter) stepID() string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.currentStep == "" {
-		a.currentStep = agentledger.NewID()
+	if a.currentTurn != "" {
+		return a.currentTurn, nil
 	}
-	return a.currentStep
+	turn, err := a.runtimeRecorder.StartTurn(ctx, map[string]any{"implicit": true})
+	if err != nil {
+		return "", fmt.Errorf("open implicit agentgo turn: %w", err)
+	}
+	a.currentTurn = turn.ID
+	return turn.ID, nil
 }
 
-func (a *Adapter) clearStep() {
+func (a *Adapter) setTurn(turnID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.currentStep = ""
+	a.currentTurn = turnID
+}
+
+func (a *Adapter) clearTurn() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.currentTurn = ""
 }
 
 type ConcreteMessageCodec struct{}

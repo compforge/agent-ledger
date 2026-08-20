@@ -4,24 +4,27 @@ from collections import defaultdict
 
 from pydantic import BaseModel, ConfigDict
 
-from agent_ledger.models import EventType, StoredEvent
+from agent_ledger.models import EventType, SessionView, StoredEvent
 
 
-class StreamGap(BaseModel):
+class LaneGap(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    stream_id: str
-    expected_version: int
-    actual_version: int
+    lane_id: str
+    expected_seq: int
+    actual_seq: int
 
 
 class UnresolvedAttempt(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     run_id: str
-    step_id: str | None
+    lane_id: str
+    turn_id: str
+    action_id: str
+    action_type: str
     attempt_id: str
-    kind: str
+    attempt_no: int
     requested_event_id: str
 
 
@@ -30,65 +33,71 @@ class RunEdge(BaseModel):
 
     parent_run_id: str
     child_run_id: str
-    caused_by_event_id: str
+    causation_id: str
 
 
 class SessionInspection(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     timeline: tuple[StoredEvent, ...]
-    stream_gaps: tuple[StreamGap, ...]
+    lane_gaps: tuple[LaneGap, ...]
     unresolved_attempts: tuple[UnresolvedAttempt, ...]
     run_edges: tuple[RunEdge, ...]
 
 
-def inspect_session(events: list[StoredEvent]) -> SessionInspection:
-    versions: dict[str, int] = defaultdict(lambda: -1)
-    gaps: list[StreamGap] = []
-    open_attempts: dict[tuple[str, str], UnresolvedAttempt] = {}
+def inspect_session(view: SessionView) -> SessionInspection:
+    lanes = {lane.id: lane for lane in view.lanes}
+    turns = {turn.id: turn for turn in view.turns}
+    actions = {action.id: action for action in view.actions}
+    attempts = {attempt.id: attempt for attempt in view.attempts}
+    expected: dict[str, int] = defaultdict(lambda: 1)
+    gaps: list[LaneGap] = []
+    open_attempts: dict[str, UnresolvedAttempt] = {}
     edges: dict[tuple[str, str], RunEdge] = {}
 
-    for event in events:
-        expected = versions[event.stream_id] + 1
-        if event.stream_version != expected:
+    for event in sorted(view.events, key=lambda item: (item.lane_id, item.seq)):
+        if event.seq != expected[event.lane_id]:
             gaps.append(
-                StreamGap(
-                    stream_id=event.stream_id,
-                    expected_version=expected,
-                    actual_version=event.stream_version,
+                LaneGap(
+                    lane_id=event.lane_id,
+                    expected_seq=expected[event.lane_id],
+                    actual_seq=event.seq,
                 )
             )
-        versions[event.stream_id] = event.stream_version
+        expected[event.lane_id] = event.seq + 1
 
-        if event.parent_run_id is not None and event.caused_by_event_id is not None:
-            edges[(event.parent_run_id, event.run_id)] = RunEdge(
-                parent_run_id=event.parent_run_id,
-                child_run_id=event.run_id,
-                caused_by_event_id=event.caused_by_event_id,
-            )
-
-        if event.attempt_id is None:
+    for event in view.events:
+        lane = lanes[event.lane_id]
+        if event.event_type == EventType.RUN_STARTED:
+            parent_run_id = event.payload.get("parent_run_id")
+            if isinstance(parent_run_id, str) and event.causation_id is not None:
+                edges[(parent_run_id, lane.run_id)] = RunEdge(
+                    parent_run_id=parent_run_id,
+                    child_run_id=lane.run_id,
+                    causation_id=event.causation_id,
+                )
+        if event.subject_kind != "attempt":
             continue
-        key = (event.run_id, event.attempt_id)
-        if event.event_type in {EventType.MODEL_REQUESTED, EventType.TOOL_REQUESTED}:
-            open_attempts[key] = UnresolvedAttempt(
-                run_id=event.run_id,
-                step_id=event.step_id,
-                attempt_id=event.attempt_id,
-                kind="model" if event.event_type == EventType.MODEL_REQUESTED else "tool",
-                requested_event_id=event.event_id,
+        attempt = attempts[event.subject_id]
+        action = actions[attempt.action_id]
+        turn = turns[action.turn_id]
+        if event.event_type == EventType.ATTEMPT_REQUESTED:
+            open_attempts[attempt.id] = UnresolvedAttempt(
+                run_id=lane.run_id,
+                lane_id=lane.id,
+                turn_id=turn.id,
+                action_id=action.id,
+                action_type=action.type,
+                attempt_id=attempt.id,
+                attempt_no=attempt.attempt_no,
+                requested_event_id=event.id,
             )
-        elif event.event_type in {
-            EventType.MODEL_COMPLETED,
-            EventType.MODEL_FAILED,
-            EventType.TOOL_COMPLETED,
-            EventType.TOOL_FAILED,
-        }:
-            open_attempts.pop(key, None)
+        elif event.event_type in {EventType.ATTEMPT_COMPLETED, EventType.ATTEMPT_FAILED}:
+            open_attempts.pop(attempt.id, None)
 
     return SessionInspection(
-        timeline=tuple(events),
-        stream_gaps=tuple(gaps),
+        timeline=view.events,
+        lane_gaps=tuple(gaps),
         unresolved_attempts=tuple(open_attempts.values()),
         run_edges=tuple(edges.values()),
     )

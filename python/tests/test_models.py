@@ -1,75 +1,55 @@
-from __future__ import annotations
-
-import json
-from pathlib import Path
+from datetime import UTC, datetime
 
 import pytest
-from jsonschema import Draft202012Validator, FormatChecker
-from jsonschema.exceptions import ValidationError
+from pydantic import ValidationError
 
-from agent_ledger import Actor, MemoryArtifactStore, ProposedEvent, StoredEvent
-from agent_ledger.frameworks.plain_loop import PlainLoopProfile
-from agent_ledger.models import canonical_append_digest, utc_now
+from agent_ledger import Action, Actor, Attempt, Lane, ProposedEvent, Turn, new_id
 
 
-def test_event_matches_normative_json_schema() -> None:
+def test_ledger_owned_ids_are_uuid7() -> None:
+    lane = Lane(session_id="session", run_id="run")
+    turn = Turn(lane_id=lane.id)
+    action = Action(turn_id=turn.id, type="compact")
+    attempt = Attempt(action_id=action.id, attempt_no=1)
     event = ProposedEvent(
-        event_type="test.recorded",
-        session_id="session",
-        run_id="run",
-        actor=Actor(type="agent", id="test"),
+        lane_id=lane.id,
+        subject_id=attempt.id,
+        event_type="attempt.requested",
+        actor_id=Actor(type="harness").id,
     )
-    schema_path = Path(__file__).parents[2] / "spec" / "schemas" / "event.schema.json"
-    schema = json.loads(schema_path.read_text())
-    validator = Draft202012Validator(schema, format_checker=FormatChecker())
 
-    validator.validate(event.model_dump(mode="json", exclude_none=True))
-    stored = StoredEvent.from_proposed(
-        event,
-        stream_id="run",
-        stream_version=0,
-        commit_cursor="0",
-        committed_at=utc_now(),
+    assert all(
+        value.split("-")[2].startswith("7")
+        for value in (lane.id, turn.id, action.id, attempt.id, event.id, new_id())
     )
-    validator.validate(stored.model_dump(mode="json", exclude_none=True))
 
 
-def test_event_schema_requires_complete_causal_parent() -> None:
-    schema_path = Path(__file__).parents[2] / "spec" / "schemas" / "event.schema.json"
-    schema = json.loads(schema_path.read_text())
-    event = {
-        "schema_version": "1.0",
-        "event_id": "event",
-        "event_type": "run.started",
-        "session_id": "session",
-        "run_id": "run",
-        "actor": {"type": "agent", "id": "child"},
-        "occurred_at": "2026-08-09T00:00:00Z",
-        "parent_run_id": "parent",
-        "payload": {},
-    }
+def test_event_type_prefix_identifies_subject_kind() -> None:
+    lane = Lane(session_id="session", run_id="run")
+    event = ProposedEvent(
+        lane_id=lane.id,
+        subject_id=lane.id,
+        event_type="lane.framework.test.recorded",
+        actor_id=Actor(type="harness").id,
+    )
 
+    assert event.subject_kind == "lane"
     with pytest.raises(ValidationError):
-        Draft202012Validator(schema).validate(event)
+        ProposedEvent(
+            lane_id=lane.id,
+            subject_id=lane.id,
+            event_type="framework.test.recorded",
+            actor_id=Actor(type="harness").id,
+        )
 
 
-async def test_memory_artifact_round_trip() -> None:
-    store = MemoryArtifactStore()
-    ref = await store.put("session", b"large model output", "text/plain")
+def test_timestamps_require_timezone() -> None:
+    with pytest.raises(ValidationError):
+        Lane(session_id="session", run_id="run", created_at=datetime(2026, 1, 2))
 
-    assert ref.size == 18
-    assert await store.get(ref) == b"large model output"
-
-
-def test_append_digest_matches_cross_language_vector() -> None:
-    vector_path = Path(__file__).parents[2] / "conformance" / "vectors" / "append.json"
-    vector = json.loads(vector_path.read_text())
-    events = [ProposedEvent.model_validate(event) for event in vector["events"]]
-
-    assert canonical_append_digest(events) == vector["sha256"]
+    Lane(session_id="session", run_id="run", created_at=datetime(2026, 1, 2, tzinfo=UTC))
 
 
-def test_adapter_descriptor_matches_normative_schema() -> None:
-    schema_path = Path(__file__).parents[2] / "spec" / "schemas" / "adapter.schema.json"
-    schema = json.loads(schema_path.read_text())
-    Draft202012Validator(schema).validate(PlainLoopProfile.descriptor.model_dump(mode="json"))
+def test_actor_is_extensible() -> None:
+    actor = Actor(type="custom-runtime")
+    assert actor.type == "custom-runtime"

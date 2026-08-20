@@ -6,28 +6,43 @@ class StoreError(AgentLedgerError):
     """The selected store could not complete an operation."""
 
 
-class StreamConflict(StoreError):
-    def __init__(self, expected_version: int, actual_version: int) -> None:
-        self.expected_version = expected_version
-        self.actual_version = actual_version
+class LaneConflict(StoreError):
+    def __init__(self, expected_last_seq: int, actual_last_seq: int) -> None:
+        self.expected_last_seq = expected_last_seq
+        self.actual_last_seq = actual_last_seq
         super().__init__(
-            f"stream version conflict: expected {expected_version}, actual {actual_version}"
+            f"lane sequence conflict: expected {expected_last_seq}, actual {actual_last_seq}"
         )
 
 
 class IdempotencyViolation(StoreError):
     def __init__(self, append_id: str) -> None:
         self.append_id = append_id
-        super().__init__(f"append_id {append_id!r} was already used for different events")
+        super().__init__(f"append id {append_id!r} was already used for different events")
 
 
 class DuplicateEvent(StoreError):
     def __init__(self, event_id: str) -> None:
         self.event_id = event_id
-        super().__init__(f"event_id {event_id!r} already exists")
+        super().__init__(f"event id {event_id!r} already exists")
 
 
-class InvalidCursor(StoreError):
-    def __init__(self, cursor: str) -> None:
-        self.cursor = cursor
-        super().__init__(f"invalid commit cursor: {cursor!r}")
+class EntityConflict(StoreError):
+    def __init__(self, entity: str, entity_id: str) -> None:
+        self.entity = entity
+        self.entity_id = entity_id
+        super().__init__(f"{entity} {entity_id!r} already exists or violates a uniqueness rule")
+
+
+class EntityNotFound(StoreError):
+    def __init__(self, entity: str, entity_id: str) -> None:
+        self.entity = entity
+        self.entity_id = entity_id
+        super().__init__(f"{entity} {entity_id!r} does not exist")
+
+
+class SubjectMismatch(StoreError):
+    def __init__(self, event_id: str, lane_id: str) -> None:
+        self.event_id = event_id
+        self.lane_id = lane_id
+        super().__init__(f"event {event_id!r} subject does not belong to lane {lane_id!r}")

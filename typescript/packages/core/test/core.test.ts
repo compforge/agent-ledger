@@ -5,32 +5,44 @@ import { test } from "node:test";
 
 import {
   canonicalAppendDigest,
-  DuplicateEvent,
+  LaneConflict,
+  LaneRecorder,
   MemoryEventStore,
+  newAction,
+  newActor,
+  newAttempt,
+  newId,
+  newLane,
+  newTurn,
   proposedEvent,
-  SessionRecorder,
 } from "../src/index.js";
 
-test("event streams order framework state independently from semantic runs", async () => {
+test("execution hierarchy projects a session", async () => {
   const store = new MemoryEventStore();
-  const stream = { session_id: "session", stream_id: "framework/pi/native" };
-  const first = proposedEvent({
-    event_id: "event-1",
-    occurred_at: "2026-01-02T03:04:05.000Z",
-    event_type: "framework.state.recorded",
-    session_id: "session",
-    run_id: "run-1",
-    actor: { type: "agent", id: "pi" },
+  const actor = newActor("agent", "plain-loop");
+  const lane = newLane("session", "run", "main");
+  const turn = newTurn(lane.id);
+  const action = newAction(turn.id, "model_call");
+  const attempt = newAttempt(action.id, 1);
+  await store.createActor(actor);
+  await store.createLane(lane);
+  await store.createTurn(turn);
+  await store.createAction(action);
+  await store.createAttempt(attempt);
+  const event = proposedEvent({
+    lane_id: lane.id,
+    subject_id: attempt.id,
+    event_type: "attempt.requested",
+    actor_id: actor.id,
+    payload: { model: "test" },
   });
-  const second = { ...first, event_id: "event-2", run_id: "run-2" };
-
-  await store.append(stream, -1, "append-1", [first]);
-  await store.append(stream, 0, "append-2", [second]);
-
-  const events = [];
-  for await (const event of store.readStream(stream)) events.push(event);
-  assert.deepEqual(events.map((event) => event.run_id), ["run-1", "run-2"]);
-  assert.equal(canonicalAppendDigest([first]), canonicalAppendDigest([structuredClone(first)]));
+  const receipt = await store.append(lane.id, 0, newId(), [event]);
+  assert.equal(receipt.last_seq, 1);
+  const view = await store.loadSession("session");
+  assert.deepEqual(
+    [view.actors.length, view.lanes.length, view.turns.length, view.actions.length, view.attempts.length, view.events.length],
+    [1, 1, 1, 1, 1, 1],
+  );
 });
 
 test("append digest matches the cross-language vector", async () => {
@@ -40,95 +52,57 @@ test("append digest matches the cross-language vector", async () => {
   assert.equal(canonicalAppendDigest(vector.events), vector.sha256);
 });
 
-test("event id uniqueness is scoped to a session", async () => {
+test("append is idempotent and rejects a stale lane sequence", async () => {
   const store = new MemoryEventStore();
-  const original = proposedEvent({
-    event_id: "shared-event-id",
-    occurred_at: "2026-01-02T03:04:05.000Z",
-    event_type: "test.recorded",
-    session_id: "session-1",
-    run_id: "run-1",
-    actor: { type: "agent", id: "test" },
+  const actor = newActor("agent");
+  const lane = newLane("session", "run");
+  await store.createActor(actor);
+  await store.createLane(lane);
+  const event = proposedEvent({
+    lane_id: lane.id, subject_id: lane.id, event_type: "lane.started", actor_id: actor.id,
   });
-  const reused = { ...original, session_id: "session-2", run_id: "run-2" };
-
-  await store.append({ session_id: "session-1", stream_id: "run-1" }, -1, "append-1", [original]);
-  await store.append({ session_id: "session-2", stream_id: "run-2" }, -1, "append-2", [reused]);
+  const appendId = newId();
+  const first = await store.append(lane.id, 0, appendId, [event]);
+  const second = await store.append(lane.id, 0, appendId, [event]);
+  assert.deepEqual(second, first);
+  await assert.rejects(
+    store.append(lane.id, 0, newId(), [proposedEvent({
+      lane_id: lane.id, subject_id: lane.id, event_type: "lane.completed", actor_id: actor.id,
+    })]),
+    LaneConflict,
+  );
 });
 
-test("duplicate event ids reject the whole append batch", async () => {
+test("recorder gives retries a new attempt under the same action", async () => {
   const store = new MemoryEventStore();
-  const stream = { session_id: "session", stream_id: "run" };
-  const first = proposedEvent({
-    event_id: "duplicate-event",
-    occurred_at: "2026-01-02T03:04:05.000Z",
-    event_type: "test.first",
-    session_id: stream.session_id,
-    run_id: stream.stream_id,
-    actor: { type: "agent", id: "test" },
+  const recorder = await LaneRecorder.open({
+    store, sessionId: "session", runId: "run", actor: newActor("agent", "plain-loop"),
   });
-
-  await assert.rejects(
-    store.append(stream, -1, "append", [first, { ...first, event_type: "test.second" }]),
-    DuplicateEvent,
-  );
-  const stored = [];
-  for await (const event of store.readStream(stream)) stored.push(event);
-  assert.deepEqual(stored, []);
+  const turn = await recorder.startTurn();
+  const first = await recorder.beforeModelCall(turn.id, { model: "test" });
+  await recorder.modelFailed(first, new Error("timeout"));
+  const second = await recorder.retry(first.action_id, 2, { model: "test" });
+  assert.equal(second.action_id, first.action_id);
+  assert.notEqual(second.attempt_id, first.attempt_id);
+  assert.equal(second.attempt_no, 2);
 });
 
 test("committed event content is immutable", async () => {
   const store = new MemoryEventStore();
-  const stream = { session_id: "session", stream_id: "run" };
+  const actor = newActor("agent");
+  const lane = newLane("session", "run");
+  await store.createActor(actor);
+  await store.createLane(lane);
   const event = proposedEvent({
-    event_id: "event",
-    occurred_at: "2026-01-02T03:04:05.000Z",
-    event_type: "test.recorded",
-    session_id: stream.session_id,
-    run_id: stream.stream_id,
-    actor: { type: "agent", id: "test" },
+    lane_id: lane.id, subject_id: lane.id, event_type: "lane.recorded", actor_id: actor.id,
     payload: { nested: { value: 1 } },
   });
-
-  await store.append(stream, -1, "append", [event]);
+  await store.append(lane.id, 0, newId(), [event]);
   (event.payload.nested as { value: number }).value = 2;
-
   const stored = [];
-  for await (const item of store.readStream(stream)) stored.push(item);
+  for await (const item of store.loadLane(lane.id)) stored.push(item);
   (stored[0]!.payload.nested as { value: number }).value = 3;
-
   const reloaded = [];
-  for await (const item of store.readStream(stream)) reloaded.push(item);
+  for await (const item of store.loadLane(lane.id)) reloaded.push(item);
   assert.deepEqual(reloaded[0]!.payload.nested, { value: 1 });
-});
-
-test("an orchestrator links multiple agent runs in one session", async () => {
-  const store = new MemoryEventStore();
-  const orchestrator = new SessionRecorder({
-    store,
-    sessionId: "session",
-    runId: "orchestrator-run",
-    actor: { type: "orchestrator", id: "planner" },
-  });
-  await orchestrator.startRun();
-
-  for (const role of ["researcher", "reviewer"]) {
-    const dispatch = await orchestrator.record("orchestration.agent.dispatched", {
-      payload: { role },
-    });
-    const child = orchestrator.child({
-      runId: `${role}-run`,
-      actor: { type: "agent", id: role },
-      causedByEventId: dispatch.event_id,
-    });
-    await child.startRun();
-  }
-
-  const childStarts = [];
-  for await (const event of store.scanSession("session")) {
-    if (event.parent_run_id !== undefined) childStarts.push(event);
-  }
-  assert.deepEqual(childStarts.map((event) => event.run_id), ["researcher-run", "reviewer-run"]);
-  assert.deepEqual(childStarts.map((event) => event.parent_run_id), ["orchestrator-run", "orchestrator-run"]);
-  assert.ok(childStarts.every((event) => event.caused_by_event_id !== undefined));
 });
