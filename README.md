@@ -48,6 +48,10 @@ Session and Run IDs are supplied by the host. Ledger-owned IDs use UUIDv7. Reque
 committed before external calls. A requested Attempt without a terminal Event is unresolved after
 a crash and must be reconciled; a side-effecting tool is never silently retried.
 
+SDKs export constants for the Core Action and Event vocabulary. The stored fields remain open
+strings: framework and application extensions use namespaced values and are preserved by Stores.
+The normative list lives in [`spec/vocabulary.json`](spec/vocabulary.json).
+
 ## Repository
 
 | Area | Responsibility |

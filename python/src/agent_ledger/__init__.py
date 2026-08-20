@@ -27,6 +27,7 @@ from agent_ledger.inspection import (
 from agent_ledger.models import (
     SCHEMA_VERSION,
     Action,
+    ActionType,
     Actor,
     AppendReceipt,
     ArtifactRef,

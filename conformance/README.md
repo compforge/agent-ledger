@@ -1,7 +1,8 @@
 # Conformance
 
 Language SDKs consume the same golden vectors to verify proposed-Event encoding and append digest
-identity. Adapter contract suites live beside their implementations.
+identity, and compare their exported Core type constants with `spec/vocabulary.json`. Adapter
+contract suites live beside their implementations.
 
 Store suites verify:
 

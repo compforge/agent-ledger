@@ -30,6 +30,13 @@ def new_id() -> str:
     return str(UUID(int=value))
 
 
+class ActionType(StrEnum):
+    MODEL_CALL = "model_call"
+    TOOL_CALL = "tool_call"
+    COMPACT = "compact"
+    CHECKPOINT = "checkpoint"
+
+
 class EventType(StrEnum):
     SESSION_STARTED = "session.started"
     SESSION_COMPLETED = "session.completed"

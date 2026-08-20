@@ -107,6 +107,32 @@ payload fields, and extensions.
 Large inputs and outputs SHOULD use an `ArtifactRef`. An application-selected Artifact Store owns
 the bytes; the Event keeps their digest, media type, size, and URI.
 
+## Core vocabulary
+
+`spec/vocabulary.json` is the machine-readable registry of Core Action and Event type values. SDKs
+export constants for this vocabulary, but `Action.type` and `event_type` remain strings: Stores MUST
+preserve unknown values and MUST NOT reject an otherwise valid record merely because its type is
+not in the Core registry.
+
+Core Action types are:
+
+| Type | Meaning |
+| --- | --- |
+| `model_call` | One logical model invocation; physical retries are Attempts. |
+| `tool_call` | One logical tool invocation; physical retries are Attempts. |
+| `compact` | A Harness context compaction. |
+| `checkpoint` | A Harness checkpoint operation; the durable result is a separate Checkpoint object. |
+
+Core lifecycle Event types are `session.started/completed`, `run.started/completed/failed/cancelled`,
+`lane.created`, `turn.started/completed/failed`, `action.started/completed/failed`, and
+`attempt.requested/completed/failed`. The standard framework-state Events are
+`lane.framework.snapshot.saved` and `lane.framework.checkpoint.linked`.
+
+Two-segment Event names are reserved for the Core vocabulary. Extension Events use
+`<subject-kind>.<namespace>.<name...>`, for example `lane.framework.pi.entry.appended`; custom Action
+types similarly use a namespace such as `framework.pi.branch_switch`. This naming rule prevents
+independent adapters from claiming short names while keeping the protocol open to new Harnesses.
+
 ## Append contract
 
 An empty Lane has `last_seq = 0`; its first accepted Event has `seq = 1`.

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_ledger.errors import EntityConflict, EntityNotFound
 from agent_ledger.models import (
     Action,
+    ActionType,
     Actor,
     AppendReceipt,
     Attempt,
@@ -21,11 +22,13 @@ from agent_ledger.models import (
 )
 from agent_ledger.store import EventStore
 
+_RetryableActionType = Literal[ActionType.MODEL_CALL, ActionType.TOOL_CALL]
+
 
 class AttemptHandle(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    action_type: Literal["model_call", "tool_call"]
+    action_type: _RetryableActionType
     turn_id: str = Field(min_length=1)
     action_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
@@ -222,7 +225,7 @@ class LaneRecorder:
         *,
         payload: dict[str, Any],
     ) -> AttemptHandle:
-        return await self._before_call("model_call", _entity_id(turn), payload)
+        return await self._before_call(ActionType.MODEL_CALL, _entity_id(turn), payload)
 
     async def before_tool_call(
         self,
@@ -230,7 +233,7 @@ class LaneRecorder:
         *,
         payload: dict[str, Any],
     ) -> AttemptHandle:
-        return await self._before_call("tool_call", _entity_id(turn), payload)
+        return await self._before_call(ActionType.TOOL_CALL, _entity_id(turn), payload)
 
     async def retry(
         self,
@@ -242,9 +245,9 @@ class LaneRecorder:
         action = await self.store.get_action(action_id)
         if action is None:
             raise EntityNotFound("action", action_id)
-        if action.type not in {"model_call", "tool_call"}:
+        if action.type not in {ActionType.MODEL_CALL, ActionType.TOOL_CALL}:
             raise ValueError(f"action {action_id!r} is not retryable")
-        action_type = cast(Literal["model_call", "tool_call"], action.type)
+        action_type = cast(_RetryableActionType, ActionType(action.type))
         return await self._before_call(
             action_type,
             action.turn_id,
@@ -286,7 +289,7 @@ class LaneRecorder:
         *,
         payload: dict[str, Any],
     ) -> StoredEvent:
-        _require_action_type(attempt, "model_call")
+        _require_action_type(attempt, ActionType.MODEL_CALL)
         return await self.attempt_completed(attempt, payload=payload)
 
     async def model_failed(
@@ -296,7 +299,7 @@ class LaneRecorder:
         *,
         payload: dict[str, Any] | None = None,
     ) -> StoredEvent:
-        _require_action_type(attempt, "model_call")
+        _require_action_type(attempt, ActionType.MODEL_CALL)
         return await self.attempt_failed(attempt, error, payload=payload)
 
     async def tool_completed(
@@ -305,7 +308,7 @@ class LaneRecorder:
         *,
         payload: dict[str, Any],
     ) -> StoredEvent:
-        _require_action_type(attempt, "tool_call")
+        _require_action_type(attempt, ActionType.TOOL_CALL)
         return await self.attempt_completed(attempt, payload=payload)
 
     async def tool_failed(
@@ -315,7 +318,7 @@ class LaneRecorder:
         *,
         payload: dict[str, Any] | None = None,
     ) -> StoredEvent:
-        _require_action_type(attempt, "tool_call")
+        _require_action_type(attempt, ActionType.TOOL_CALL)
         return await self.attempt_failed(attempt, error, payload=payload)
 
     async def record_action(
@@ -391,7 +394,7 @@ class LaneRecorder:
 
     async def _before_call(
         self,
-        action_type: Literal["model_call", "tool_call"],
+        action_type: _RetryableActionType,
         turn_id: str,
         payload: dict[str, Any],
         *,
@@ -424,7 +427,7 @@ def _entity_id(entity: Turn | str) -> str:
 
 def _require_action_type(
     attempt: AttemptHandle,
-    expected: Literal["model_call", "tool_call"],
+    expected: _RetryableActionType,
 ) -> None:
     if attempt.action_type != expected:
         raise ValueError(f"expected a {expected} attempt, got {attempt.action_type}")
