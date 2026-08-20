@@ -4,8 +4,10 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 
 import {
+  ActionType,
   canonicalAppendDigest,
   CheckpointConflict,
+  EventType,
   LaneConflict,
   LaneRecorder,
   MemoryEventStore,
@@ -18,6 +20,15 @@ import {
   proposedEvent,
   proposedCheckpoint,
 } from "../src/index.js";
+
+test("core vocabulary matches the cross-language registry", async () => {
+  const vocabulary = JSON.parse(
+    await readFile(resolve(process.cwd(), "../spec/vocabulary.json"), "utf8"),
+  ) as { action_types: string[]; event_types: string[] };
+
+  assert.deepEqual(Object.values(ActionType), vocabulary.action_types);
+  assert.deepEqual(Object.values(EventType), vocabulary.event_types);
+});
 
 test("execution hierarchy projects a session", async () => {
   const store = new MemoryEventStore();

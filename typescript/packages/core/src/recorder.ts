@@ -15,6 +15,7 @@ import {
   type StoredEvent,
   type Turn,
 } from "./types.js";
+import { ActionType, EventType } from "./vocabulary.js";
 
 export interface CausalParent {
   runId: string;
@@ -118,72 +119,72 @@ export class LaneRecorder {
   }
 
   startRun(payload: { [key: string]: JsonValue } = {}): Promise<StoredEvent> {
-    return this.record("run.started", this.lane.run_id, {
+    return this.record(EventType.RUN_STARTED, this.lane.run_id, {
       payload: this.parent === undefined ? payload : { ...payload, parent_run_id: this.parent.runId },
       ...(this.parent === undefined ? {} : { causationId: this.parent.causationId }),
     });
   }
 
   completeRun(payload: { [key: string]: JsonValue } = {}): Promise<StoredEvent> {
-    return this.record("run.completed", this.lane.run_id, { payload });
+    return this.record(EventType.RUN_COMPLETED, this.lane.run_id, { payload });
   }
 
   failRun(error: unknown): Promise<StoredEvent> {
-    return this.record("run.failed", this.lane.run_id, { payload: errorPayload(error) });
+    return this.record(EventType.RUN_FAILED, this.lane.run_id, { payload: errorPayload(error) });
   }
 
   async startTurn(payload: { [key: string]: JsonValue } = {}): Promise<Turn> {
     const turn = newTurn(this.lane.id);
     await this.store.createTurn(turn);
-    await this.record("turn.started", turn.id, { payload });
+    await this.record(EventType.TURN_STARTED, turn.id, { payload });
     return turn;
   }
 
   completeTurn(turnId: string, payload: { [key: string]: JsonValue } = {}): Promise<StoredEvent> {
-    return this.record("turn.completed", turnId, { payload });
+    return this.record(EventType.TURN_COMPLETED, turnId, { payload });
   }
 
   failTurn(turnId: string, error: unknown): Promise<StoredEvent> {
-    return this.record("turn.failed", turnId, { payload: errorPayload(error) });
+    return this.record(EventType.TURN_FAILED, turnId, { payload: errorPayload(error) });
   }
 
   beforeModelCall(turnId: string, payload: { [key: string]: JsonValue }): Promise<AttemptHandle> {
-    return this.#beforeCall("model_call", turnId, payload, undefined, 1);
+    return this.#beforeCall(ActionType.MODEL_CALL, turnId, payload, undefined, 1);
   }
 
   beforeToolCall(turnId: string, payload: { [key: string]: JsonValue }): Promise<AttemptHandle> {
-    return this.#beforeCall("tool_call", turnId, payload, undefined, 1);
+    return this.#beforeCall(ActionType.TOOL_CALL, turnId, payload, undefined, 1);
   }
 
   async retry(actionId: string, attemptNo: number, payload: { [key: string]: JsonValue }): Promise<AttemptHandle> {
     const action = await this.store.getAction(actionId);
     if (action === undefined) throw new EntityNotFound(`action ${actionId}`);
-    if (action.type !== "model_call" && action.type !== "tool_call") throw new Error(`action ${actionId} is not retryable`);
+    if (action.type !== ActionType.MODEL_CALL && action.type !== ActionType.TOOL_CALL) throw new Error(`action ${actionId} is not retryable`);
     return this.#beforeCall(action.type, action.turn_id, payload, action, attemptNo);
   }
 
   modelCompleted(attempt: AttemptHandle, payload: { [key: string]: JsonValue }): Promise<StoredEvent> {
-    this.#assertActionType(attempt, "model_call");
+    this.#assertActionType(attempt, ActionType.MODEL_CALL);
     return this.#completeAttempt(attempt, payload);
   }
 
   modelFailed(attempt: AttemptHandle, error: unknown): Promise<StoredEvent> {
-    this.#assertActionType(attempt, "model_call");
+    this.#assertActionType(attempt, ActionType.MODEL_CALL);
     return this.#failAttempt(attempt, error);
   }
 
   toolCompleted(attempt: AttemptHandle, payload: { [key: string]: JsonValue }): Promise<StoredEvent> {
-    this.#assertActionType(attempt, "tool_call");
+    this.#assertActionType(attempt, ActionType.TOOL_CALL);
     return this.#completeAttempt(attempt, payload);
   }
 
   toolFailed(attempt: AttemptHandle, error: unknown): Promise<StoredEvent> {
-    this.#assertActionType(attempt, "tool_call");
+    this.#assertActionType(attempt, ActionType.TOOL_CALL);
     return this.#failAttempt(attempt, error);
   }
 
   saveSnapshot(profile: string, profileVersion: string, snapshot: JsonValue): Promise<StoredEvent> {
-    return this.record("lane.framework.snapshot.saved", this.lane.id, {
+    return this.record(EventType.LANE_FRAMEWORK_SNAPSHOT_SAVED, this.lane.id, {
       payload: { profile, profile_version: profileVersion, snapshot },
     });
   }
@@ -206,7 +207,7 @@ export class LaneRecorder {
     if (action === undefined) await this.store.createAction(targetAction);
     const attempt = newAttempt(targetAction.id, attemptNo);
     await this.store.createAttempt(attempt);
-    const requested = await this.record("attempt.requested", attempt.id, { payload });
+    const requested = await this.record(EventType.ATTEMPT_REQUESTED, attempt.id, { payload });
     return {
       action_type: actionType, turn_id: turnId, action_id: targetAction.id,
       attempt_id: attempt.id, attempt_no: attemptNo, requested_event_id: requested.id,
@@ -214,13 +215,13 @@ export class LaneRecorder {
   }
 
   #completeAttempt(attempt: AttemptHandle, payload: { [key: string]: JsonValue }): Promise<StoredEvent> {
-    return this.record("attempt.completed", attempt.attempt_id, {
+    return this.record(EventType.ATTEMPT_COMPLETED, attempt.attempt_id, {
       payload, causationId: attempt.requested_event_id,
     });
   }
 
   #failAttempt(attempt: AttemptHandle, error: unknown): Promise<StoredEvent> {
-    return this.record("attempt.failed", attempt.attempt_id, {
+    return this.record(EventType.ATTEMPT_FAILED, attempt.attempt_id, {
       payload: errorPayload(error), causationId: attempt.requested_event_id,
     });
   }

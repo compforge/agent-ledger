@@ -11,7 +11,7 @@ from agent_ledger.adapters import (
     RecoveryMode,
 )
 from agent_ledger.inspection import UnresolvedAttempt, inspect_session
-from agent_ledger.models import EventType, SessionView, StoredEvent
+from agent_ledger.models import ActionType, EventType, SessionView, StoredEvent
 from agent_ledger.recorder import LaneRecorder
 
 
@@ -114,13 +114,13 @@ def _apply_event(
     action = actions.get(attempt.action_id) if attempt is not None else None
     if action is None:
         return
-    if action.type == "model_call":
+    if action.type == ActionType.MODEL_CALL:
         model_message = event.payload.get("message")
         if isinstance(model_message, dict):
             context.messages.append(model_message)
         elif model_message is not None:
             context.messages.append({"role": "assistant", "content": model_message})
-    elif action.type == "tool_call":
+    elif action.type == ActionType.TOOL_CALL:
         result = event.payload.get("result")
         if result is not None:
             tool_message: dict[str, Any] = {"role": "tool", "content": result}

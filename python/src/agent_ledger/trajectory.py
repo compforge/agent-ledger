@@ -4,7 +4,7 @@ import json
 from collections import defaultdict
 from typing import Any
 
-from agent_ledger.models import EventType, SessionView, StoredEvent
+from agent_ledger.models import ActionType, EventType, SessionView, StoredEvent
 
 
 def project_atif(
@@ -82,9 +82,9 @@ def _project_run(
         turn = turns[action.turn_id]
         if event.event_type == EventType.ATTEMPT_REQUESTED:
             attempt_requests[attempt.id] = event
-            if action.type == "model_call":
+            if action.type == ActionType.MODEL_CALL:
                 model_name = str(event.payload.get("model", model_name))
-            elif action.type == "tool_call":
+            elif action.type == ActionType.TOOL_CALL:
                 target = _last_agent_step(steps, event, run_id, turn.id)
                 target.setdefault("tool_calls", []).append(
                     {
@@ -98,11 +98,13 @@ def _project_run(
                     }
                 )
                 tool_steps[attempt.id] = target
-        elif event.event_type == EventType.ATTEMPT_COMPLETED and action.type == "model_call":
+        elif (
+            event.event_type == EventType.ATTEMPT_COMPLETED and action.type == ActionType.MODEL_CALL
+        ):
             steps.append(_model_step(len(steps), event, run_id, turn.id, attempt.id))
         elif (
             event.event_type in {EventType.ATTEMPT_COMPLETED, EventType.ATTEMPT_FAILED}
-            and action.type == "tool_call"
+            and action.type == ActionType.TOOL_CALL
         ):
             target = tool_steps.get(attempt.id) or _last_agent_step(steps, event, run_id, turn.id)
             observation = target.setdefault("observation", {"results": []})

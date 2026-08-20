@@ -41,7 +41,8 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 2. Lane 是 Run 内的串行链路，也是 OCC 与 `seq` 的边界。一个 Run 可有 main、分支和
    framework-native Lanes；跨 Lane 顺序只用于观察。
 3. Turn 是稳定交互边界；Action 是 `model_call`、`tool_call`、`compact` 等逻辑动作；Attempt
-   是一次物理尝试。重试沿用 Action，并递增 `attempt_no`。
+   是一次物理尝试。重试沿用 Action，并递增 `attempt_no`。Core vocabulary 提供跨语言常量，但
+   type 字段保持开放；扩展使用 namespaced value。
 4. Actor、Lane、Turn、Action、Attempt、Event 和 append ID 使用 UUIDv7。业务表只表达不可变身份
    和从属关系；生命周期、输入、输出和失败均表达为 Event。
 5. Event 的 `event_type` 前缀决定 `subject_id` 的类型；`causation_id` 表达因果。时间戳、UUIDv7
@@ -76,4 +77,5 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 - `spec/schemas/checkpoint.schema.json` — Checkpoint envelope
 - `spec/schemas/mysql.sql` — 无外键的参考关系型 Schema
 - `spec/schemas/adapter.schema.json` — Adapter descriptor
+- `spec/vocabulary.json` — 跨语言 Core Action/Event type vocabulary
 - `conformance/README.md` — 跨语言一致性要求

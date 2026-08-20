@@ -4,7 +4,13 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-from agent_ledger.models import Checkpoint, ProposedEvent, canonical_append_digest
+from agent_ledger.models import (
+    ActionType,
+    Checkpoint,
+    EventType,
+    ProposedEvent,
+    canonical_append_digest,
+)
 
 
 def test_event_schema_and_digest_match_cross_language_vector() -> None:
@@ -36,3 +42,11 @@ def test_checkpoint_schema_accepts_inline_state() -> None:
     }
     Draft202012Validator(schema, format_checker=FormatChecker()).validate(checkpoint)
     Checkpoint.model_validate(checkpoint)
+
+
+def test_core_vocabulary_matches_cross_language_registry() -> None:
+    root = Path(__file__).parents[2]
+    vocabulary = json.loads((root / "spec/vocabulary.json").read_text(encoding="utf-8"))
+
+    assert [item.value for item in ActionType] == vocabulary["action_types"]
+    assert [item.value for item in EventType] == vocabulary["event_types"]
