@@ -2,7 +2,9 @@ package gormstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,11 +63,13 @@ func TestSQLiteStorePersistsExecutionModel(t *testing.T) {
 		"application/vnd.compforge.agentgo.messages+json;version=1",
 		map[string]any{"messages": []any{"hello"}, "turn": 1},
 	)
+	checkpoint.Extensions = nil
 	checkpoint.Anchor = &agentledger.CheckpointAnchor{LaneID: lane.ID, LastAppliedSeq: 1, LastAppliedEventID: event.ID}
 	saved, err := store.SaveCheckpoint(ctx, 0, checkpoint)
 	if err != nil || saved.Revision != 1 {
 		t.Fatalf("checkpoint = %#v, %v", saved, err)
 	}
+	checkpoint.Extensions = map[string]any{}
 	repeated, err := store.SaveCheckpoint(ctx, 0, checkpoint)
 	if err != nil || repeated.ID != saved.ID {
 		t.Fatalf("idempotent checkpoint = %#v, %v", repeated, err)
@@ -76,6 +80,35 @@ func TestSQLiteStorePersistsExecutionModel(t *testing.T) {
 	}
 	if len(view.Actors) != 1 || len(view.Lanes) != 1 || len(view.Turns) != 1 || len(view.Actions) != 1 || len(view.Attempts) != 1 || len(view.Events) != 1 {
 		t.Fatalf("incomplete session view: %#v", view)
+	}
+}
+
+func TestCheckpointInsertFailureIsNotARevisionConflict(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(memoryDSN()), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(db, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	actor := agentledger.NewActor("agent", "agentgo")
+	if err := store.CreateActor(ctx, actor); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE TRIGGER fail_checkpoint_insert BEFORE INSERT ON ledger_checkpoints BEGIN SELECT RAISE(ABORT, 'injected checkpoint insert failure'); END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := agentledger.NewCheckpoint("native-session", actor.ID, "application/json", map[string]any{"value": 1})
+	_, err = store.SaveCheckpoint(ctx, 0, checkpoint)
+	if err == nil || errors.Is(err, agentledger.ErrCheckpointConflict) || !strings.Contains(err.Error(), "injected checkpoint insert failure") {
+		t.Fatalf("save error = %v, want original insert failure", err)
 	}
 }
 

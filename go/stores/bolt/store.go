@@ -208,6 +208,9 @@ func (s *Store) SaveCheckpoint(ctx context.Context, expectedRevision int64, prop
 	if err := validateCheckpoint(proposed); err != nil {
 		return agentledger.Checkpoint{}, err
 	}
+	if proposed.Extensions == nil {
+		proposed.Extensions = map[string]any{}
+	}
 	snapshot, err := clone(proposed)
 	if err != nil {
 		return agentledger.Checkpoint{}, err
@@ -322,14 +325,38 @@ func (s *Store) Append(ctx context.Context, laneID string, expectedLastSeq int64
 	}
 	var receipt agentledger.AppendReceipt
 	err = s.db.Update(func(tx *bolt.Tx) error {
-		lanes, _ := tx.CreateBucketIfNotExists(lanesBucket)
-		actors, _ := tx.CreateBucketIfNotExists(actorsBucket)
-		turns, _ := tx.CreateBucketIfNotExists(turnsBucket)
-		actions, _ := tx.CreateBucketIfNotExists(actionsBucket)
-		attempts, _ := tx.CreateBucketIfNotExists(attemptsBucket)
-		eventsBucketRef, _ := tx.CreateBucketIfNotExists(eventsBucket)
-		appends, _ := tx.CreateBucketIfNotExists(appendsBucket)
-		laneEvents, _ := tx.CreateBucketIfNotExists(laneEventsBucket)
+		lanes, err := tx.CreateBucketIfNotExists(lanesBucket)
+		if err != nil {
+			return err
+		}
+		actors, err := tx.CreateBucketIfNotExists(actorsBucket)
+		if err != nil {
+			return err
+		}
+		turns, err := tx.CreateBucketIfNotExists(turnsBucket)
+		if err != nil {
+			return err
+		}
+		actions, err := tx.CreateBucketIfNotExists(actionsBucket)
+		if err != nil {
+			return err
+		}
+		attempts, err := tx.CreateBucketIfNotExists(attemptsBucket)
+		if err != nil {
+			return err
+		}
+		eventsBucketRef, err := tx.CreateBucketIfNotExists(eventsBucket)
+		if err != nil {
+			return err
+		}
+		appends, err := tx.CreateBucketIfNotExists(appendsBucket)
+		if err != nil {
+			return err
+		}
+		laneEvents, err := tx.CreateBucketIfNotExists(laneEventsBucket)
+		if err != nil {
+			return err
+		}
 		if encoded := appends.Get([]byte(appendID)); encoded != nil {
 			if err := json.Unmarshal(encoded, &receipt); err != nil {
 				return err

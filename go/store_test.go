@@ -110,6 +110,7 @@ func TestMemoryStoreCheckpointVersionsAndAnchor(t *testing.T) {
 		"application/vnd.compforge.agentgo.messages+json;version=1",
 		map[string]any{"messages": []any{"hello"}},
 	)
+	proposed.Extensions = nil
 	proposed.Anchor = &CheckpointAnchor{LaneID: lane.ID, LastAppliedSeq: 1, LastAppliedEventID: event.ID}
 	first, err := store.SaveCheckpoint(ctx, 0, proposed)
 	if err != nil {
@@ -118,6 +119,7 @@ func TestMemoryStoreCheckpointVersionsAndAnchor(t *testing.T) {
 	if first.Revision != 1 {
 		t.Fatalf("revision = %d", first.Revision)
 	}
+	proposed.Extensions = map[string]any{}
 	repeated, err := store.SaveCheckpoint(ctx, 0, proposed)
 	if err != nil || repeated.ID != first.ID {
 		t.Fatalf("idempotent save = %#v, %v", repeated, err)

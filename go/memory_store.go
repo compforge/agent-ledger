@@ -230,6 +230,9 @@ func (s *MemoryEventStore) SaveCheckpoint(ctx context.Context, expectedRevision 
 	if err := validateCheckpoint(proposed); err != nil {
 		return Checkpoint{}, err
 	}
+	if proposed.Extensions == nil {
+		proposed.Extensions = map[string]any{}
+	}
 	snapshot, err := cloneOne(proposed)
 	if err != nil {
 		return Checkpoint{}, err
