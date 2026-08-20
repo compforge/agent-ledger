@@ -267,8 +267,11 @@ export class LaneRecorder {
         appendId ?? newId(),
         events,
       );
-      this.#expectedLastSeq = receipt.last_seq;
-      this.lane.last_seq = receipt.last_seq;
+      // An idempotent replay returns its original receipt, which may predate later appends.
+      if (receipt.last_seq > this.#expectedLastSeq) {
+        this.#expectedLastSeq = receipt.last_seq;
+        this.lane.last_seq = receipt.last_seq;
+      }
       const stored = events.map((event, index) => ({
         ...event,
         seq: receipt.first_seq + index,

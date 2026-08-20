@@ -137,8 +137,10 @@ class LaneRecorder:
                 append_id or new_id(),
                 events,
             )
-            self.expected_last_seq = receipt.last_seq
-            self.lane = self.lane.model_copy(update={"last_seq": receipt.last_seq})
+            # An idempotent replay returns its original receipt, which may predate later appends.
+            if receipt.last_seq > self.expected_last_seq:
+                self.expected_last_seq = receipt.last_seq
+                self.lane = self.lane.model_copy(update={"last_seq": receipt.last_seq})
             return receipt
 
     async def record(

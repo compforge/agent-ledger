@@ -200,14 +200,23 @@ func TestRunCompletionLinksCheckpointAtomicallyAndRemainsInspectable(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	newer, err := recorder.Record(ctx, "lane.test.newer", recorder.Lane().ID, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	repeated, err := recorder.Append(ctx, appendID, checkpointLinked, runCompleted)
 	if err != nil || repeated.ID != receipt.ID || repeated.LastSeq != receipt.LastSeq {
 		t.Fatalf("idempotent recorder append = %#v, %v", repeated, err)
 	}
+	afterReplay, err := recorder.Record(ctx, "lane.test.after_replay", recorder.Lane().ID, nil, "")
+	if err != nil {
+		t.Fatalf("append after replay: %v", err)
+	}
 	if len(receipt.EventIDs) != 2 || receipt.EventIDs[0] != checkpointLinked.ID || receipt.EventIDs[1] != runCompleted.ID {
 		t.Fatalf("completion receipt = %#v", receipt)
 	}
-	if receipt.FirstSeq+1 != receipt.LastSeq || recorder.Lane().LastSeq != receipt.LastSeq {
+	if receipt.FirstSeq+1 != receipt.LastSeq || newer.Seq != receipt.LastSeq+1 ||
+		afterReplay.Seq != newer.Seq+1 || recorder.Lane().LastSeq != afterReplay.Seq {
 		t.Fatalf("completion batch = %#v lane = %#v", receipt, recorder.Lane())
 	}
 	if runCompleted.CausationID != checkpointLinked.ID {

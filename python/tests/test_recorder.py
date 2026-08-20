@@ -164,14 +164,18 @@ async def test_checkpoint_link_and_run_completion_are_one_inspectable_append() -
     )
     append_id = new_id()
     receipt = await recorder.append([checkpoint_linked, run_completed], append_id=append_id)
+    newer = await recorder.record("lane.test.newer", recorder.lane.id)
     repeated = await recorder.append([checkpoint_linked, run_completed], append_id=append_id)
+    after_replay = await recorder.record("lane.test.after_replay", recorder.lane.id)
     inspection = inspect_run(await store.load_run(recorder.session_id, recorder.run_id))
     stored_link = inspection.linked_checkpoints[0].event
     stored_completion = inspection.terminal_events[0]
 
     assert receipt.event_ids == (checkpoint_linked.id, run_completed.id)
     assert repeated == receipt
-    assert recorder.lane.last_seq == receipt.last_seq
+    assert newer.seq == receipt.last_seq + 1
+    assert after_replay.seq == newer.seq + 1
+    assert recorder.lane.last_seq == after_replay.seq
     assert stored_link.seq + 1 == stored_completion.seq
     assert stored_link.committed_at == stored_completion.committed_at
     assert stored_completion.causation_id == stored_link.id

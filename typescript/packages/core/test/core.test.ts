@@ -170,14 +170,18 @@ test("run completion links a checkpoint atomically and remains inspectable", asy
   });
   const appendId = newId();
   const receipt = await recorder.append([checkpointLinked, runCompleted], { appendId });
+  const newer = await recorder.record("lane.test.newer", recorder.lane.id);
   const repeated = await recorder.append([checkpointLinked, runCompleted], { appendId });
+  const afterReplay = await recorder.record("lane.test.after_replay", recorder.lane.id);
   const inspection = inspectRun(await store.loadRun("session", "run"));
   const storedLink = inspection.linked_checkpoints[0]!.event;
   const storedCompletion = inspection.terminal_events[0]!;
 
   assert.deepEqual(receipt.event_ids, [checkpointLinked.id, runCompleted.id]);
   assert.deepEqual(repeated, receipt);
-  assert.equal(recorder.lane.last_seq, receipt.last_seq);
+  assert.equal(newer.seq, receipt.last_seq + 1);
+  assert.equal(afterReplay.seq, newer.seq + 1);
+  assert.equal(recorder.lane.last_seq, afterReplay.seq);
   assert.equal(storedLink.seq + 1, storedCompletion.seq);
   assert.equal(storedLink.committed_at, storedCompletion.committed_at);
   assert.equal(storedCompletion.causation_id, storedLink.id);

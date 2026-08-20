@@ -282,8 +282,11 @@ func (r *LaneRecorder) appendEvents(ctx context.Context, appendID string, events
 	if err != nil {
 		return nil, AppendReceipt{}, err
 	}
-	r.expectedLastSeq = receipt.LastSeq
-	r.lane.LastSeq = receipt.LastSeq
+	// An idempotent replay returns its original receipt, which may predate later appends.
+	if receipt.LastSeq > r.expectedLastSeq {
+		r.expectedLastSeq = receipt.LastSeq
+		r.lane.LastSeq = receipt.LastSeq
+	}
 	stored := make([]StoredEvent, 0, len(events))
 	for index, event := range events {
 		stored = append(stored, StoredEvent{
