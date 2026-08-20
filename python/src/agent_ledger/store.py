@@ -10,6 +10,7 @@ from agent_ledger.models import (
     Lane,
     ProposedCheckpoint,
     ProposedEvent,
+    RunView,
     SessionView,
     StoredEvent,
     Turn,
@@ -56,6 +57,8 @@ class EventStore(ActorStore, Protocol):
     ) -> AsyncIterator[StoredEvent]: ...
 
     async def load_session(self, session_id: str) -> SessionView: ...
+
+    async def load_run(self, session_id: str, run_id: str) -> RunView: ...
 
 
 class CheckpointStore(ActorStore, Protocol):

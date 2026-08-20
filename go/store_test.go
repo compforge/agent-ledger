@@ -3,6 +3,7 @@ package agentledger
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -164,6 +165,71 @@ func TestLaneRecorderCreatesAttemptsForRetries(t *testing.T) {
 	}
 	if first.ActionID != second.ActionID || first.AttemptID == second.AttemptID || second.AttemptNo != 2 {
 		t.Fatalf("retry handles = %#v %#v", first, second)
+	}
+}
+
+func TestRunCompletionLinksCheckpointAtomicallyAndRemainsInspectable(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryEventStore()
+	recorder, err := OpenRecorder(ctx, RecorderOptions{
+		Store: store, SessionID: "session", RunID: "run", Actor: NewActor("agent", "plain-loop"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := recorder.StartTurn(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unresolved, err := recorder.BeforeToolCall(ctx, turn.ID, map[string]any{"tool": "charge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completion, err := recorder.CompleteRunWithCheckpoint(
+		ctx,
+		CheckpointLink{
+			CheckpointID: NewID(), Profile: "plain-loop", ProfileVersion: "1",
+			Metadata: map[string]any{"reason": "idle"},
+		},
+		map[string]any{"result": "done"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(completion.Receipt.EventIDs, []string{completion.CheckpointLinked.ID, completion.RunCompleted.ID}) {
+		t.Fatalf("completion receipt = %#v", completion.Receipt)
+	}
+	if completion.CheckpointLinked.Seq+1 != completion.RunCompleted.Seq || completion.CheckpointLinked.CommittedAt != completion.RunCompleted.CommittedAt {
+		t.Fatalf("completion events were not one append: %#v", completion)
+	}
+	if completion.RunCompleted.CausationID != completion.CheckpointLinked.ID {
+		t.Fatalf("run completion cause = %q", completion.RunCompleted.CausationID)
+	}
+	other, err := OpenRecorder(ctx, RecorderOptions{
+		Store: store, SessionID: recorder.SessionID(), RunID: "other-run", Actor: recorder.actor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.StartRun(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	view, err := store.LoadRun(ctx, recorder.SessionID(), recorder.RunID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Lanes) != 1 || view.Lanes[0].RunID != recorder.RunID() {
+		t.Fatalf("run view contains sibling Run: %#v", view.Lanes)
+	}
+	inspection := InspectRun(view)
+	if len(inspection.TerminalEvents) != 1 || inspection.TerminalEvents[0].ID != completion.RunCompleted.ID {
+		t.Fatalf("terminal events = %#v", inspection.TerminalEvents)
+	}
+	if len(inspection.LinkedCheckpoints) != 1 || inspection.LinkedCheckpoints[0].CheckpointID != completion.CheckpointLinked.Payload["checkpoint_id"] {
+		t.Fatalf("checkpoint links = %#v", inspection.LinkedCheckpoints)
+	}
+	if len(inspection.UnresolvedAttempts) != 1 || inspection.UnresolvedAttempts[0].AttemptID != unresolved.AttemptID {
+		t.Fatalf("unresolved attempts = %#v", inspection.UnresolvedAttempts)
 	}
 }
 

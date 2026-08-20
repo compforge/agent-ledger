@@ -265,6 +265,45 @@ class SessionView(BaseModel):
     events: tuple[StoredEvent, ...] = ()
 
 
+class RunView(BaseModel):
+    """Read-side snapshot for one upstream-owned Run within a Session."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    session_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    actors: tuple[Actor, ...] = ()
+    lanes: tuple[Lane, ...] = ()
+    turns: tuple[Turn, ...] = ()
+    actions: tuple[Action, ...] = ()
+    attempts: tuple[Attempt, ...] = ()
+    events: tuple[StoredEvent, ...] = ()
+
+
+def select_run(view: SessionView, run_id: str) -> RunView:
+    """Select one Run without inventing a separate authoritative Run entity."""
+    lanes = tuple(lane for lane in view.lanes if lane.run_id == run_id)
+    lane_ids = {lane.id for lane in lanes}
+    turns = tuple(turn for turn in view.turns if turn.lane_id in lane_ids)
+    turn_ids = {turn.id for turn in turns}
+    actions = tuple(action for action in view.actions if action.turn_id in turn_ids)
+    action_ids = {action.id for action in actions}
+    attempts = tuple(attempt for attempt in view.attempts if attempt.action_id in action_ids)
+    events = tuple(event for event in view.events if event.lane_id in lane_ids)
+    actor_ids = {event.actor_id for event in events}
+    actors = tuple(actor for actor in view.actors if actor.id in actor_ids)
+    return RunView(
+        session_id=view.session_id,
+        run_id=run_id,
+        actors=actors,
+        lanes=lanes,
+        turns=turns,
+        actions=actions,
+        attempts=attempts,
+        events=events,
+    )
+
+
 def canonical_append_digest(events: list[ProposedEvent] | tuple[ProposedEvent, ...]) -> str:
     body = [event.model_dump(mode="json", exclude_none=True) for event in events]
     return hashlib.sha256(rfc8785.dumps(body)).hexdigest()

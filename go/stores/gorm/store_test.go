@@ -81,6 +81,10 @@ func TestSQLiteStorePersistsExecutionModel(t *testing.T) {
 	if len(view.Actors) != 1 || len(view.Lanes) != 1 || len(view.Turns) != 1 || len(view.Actions) != 1 || len(view.Attempts) != 1 || len(view.Events) != 1 {
 		t.Fatalf("incomplete session view: %#v", view)
 	}
+	runView, err := store.LoadRun(ctx, lane.SessionID, lane.RunID)
+	if err != nil || len(runView.Lanes) != 1 || len(runView.Events) != 1 {
+		t.Fatalf("incomplete run view: %#v, %v", runView, err)
+	}
 }
 
 func TestCheckpointInsertFailureIsNotARevisionConflict(t *testing.T) {

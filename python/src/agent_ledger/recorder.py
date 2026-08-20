@@ -36,6 +36,14 @@ class AttemptHandle(BaseModel):
     requested_event_id: str = Field(min_length=1)
 
 
+class RunCompletionEvents(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    receipt: AppendReceipt
+    checkpoint_linked: StoredEvent
+    run_completed: StoredEvent
+
+
 class LaneRecorder:
     """Framework-facing recorder that serializes writes to one Lane."""
 
@@ -179,6 +187,45 @@ class LaneRecorder:
 
     async def complete_run(self, *, payload: dict[str, Any] | None = None) -> StoredEvent:
         return await self.record(EventType.RUN_COMPLETED, self.run_id, payload=payload)
+
+    async def complete_run_with_checkpoint(
+        self,
+        profile: str,
+        checkpoint_id: str,
+        *,
+        profile_version: str = "1",
+        metadata: dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> RunCompletionEvents:
+        """Atomically link a persisted Checkpoint and record Run completion."""
+        checkpoint_linked = self._checkpoint_link_event(
+            profile,
+            checkpoint_id,
+            profile_version=profile_version,
+            metadata=metadata,
+        )
+        run_completed = ProposedEvent(
+            lane_id=self.lane.id,
+            subject_id=self.run_id,
+            event_type=EventType.RUN_COMPLETED,
+            actor_id=self.actor.id,
+            causation_id=checkpoint_linked.id,
+            payload=payload or {},
+        )
+        receipt = await self.append([checkpoint_linked, run_completed])
+        return RunCompletionEvents(
+            receipt=receipt,
+            checkpoint_linked=StoredEvent.from_proposed(
+                checkpoint_linked,
+                seq=receipt.first_seq,
+                committed_at=receipt.committed_at,
+            ),
+            run_completed=StoredEvent.from_proposed(
+                run_completed,
+                seq=receipt.first_seq + 1,
+                committed_at=receipt.committed_at,
+            ),
+        )
 
     async def fail_run(
         self,
@@ -364,9 +411,32 @@ class LaneRecorder:
         profile_version: str = "1",
         metadata: dict[str, Any] | None = None,
     ) -> StoredEvent:
-        return await self.record(
-            EventType.LANE_FRAMEWORK_CHECKPOINT_LINKED,
-            self.lane.id,
+        event = self._checkpoint_link_event(
+            profile,
+            checkpoint_id,
+            profile_version=profile_version,
+            metadata=metadata,
+        )
+        receipt = await self.append([event])
+        return StoredEvent.from_proposed(
+            event,
+            seq=receipt.first_seq,
+            committed_at=receipt.committed_at,
+        )
+
+    def _checkpoint_link_event(
+        self,
+        profile: str,
+        checkpoint_id: str,
+        *,
+        profile_version: str,
+        metadata: dict[str, Any] | None,
+    ) -> ProposedEvent:
+        return ProposedEvent(
+            lane_id=self.lane.id,
+            subject_id=self.lane.id,
+            event_type=EventType.LANE_FRAMEWORK_CHECKPOINT_LINKED,
+            actor_id=self.actor.id,
             payload={
                 "profile": profile,
                 "profile_version": profile_version,

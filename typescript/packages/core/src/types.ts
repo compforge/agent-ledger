@@ -109,6 +109,33 @@ export interface SessionView {
   events: StoredEvent[];
 }
 
+export interface RunView {
+  session_id: string;
+  run_id: string;
+  actors: Actor[];
+  lanes: Lane[];
+  turns: Turn[];
+  actions: Action[];
+  attempts: Attempt[];
+  events: StoredEvent[];
+}
+
+export function selectRun(view: SessionView, runId: string): RunView {
+  const lanes = view.lanes.filter((lane) => lane.run_id === runId);
+  const laneIds = new Set(lanes.map((lane) => lane.id));
+  const turns = view.turns.filter((turn) => laneIds.has(turn.lane_id));
+  const turnIds = new Set(turns.map((turn) => turn.id));
+  const actions = view.actions.filter((action) => turnIds.has(action.turn_id));
+  const actionIds = new Set(actions.map((action) => action.id));
+  const attempts = view.attempts.filter((attempt) => actionIds.has(attempt.action_id));
+  const events = view.events.filter((event) => laneIds.has(event.lane_id));
+  const actorIds = new Set(events.map((event) => event.actor_id));
+  const actors = view.actors.filter((actor) => actorIds.has(actor.id));
+  return structuredClone({
+    session_id: view.session_id, run_id: runId, actors, lanes, turns, actions, attempts, events,
+  });
+}
+
 export type RecordingGuarantee = "strict" | "best_effort" | "unsupported";
 export type RecoveryMode = "native_store" | "snapshot" | "checkpoint" | "unsupported";
 

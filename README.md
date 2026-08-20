@@ -75,6 +75,7 @@ Applications inject an `EventStore`:
 create_actor / create_lane / create_turn / create_action / create_attempt
 append(lane_id, expected_last_seq, append_id, events)
 load_lane(lane_id, after_seq)
+load_run(session_id, run_id)
 load_session(session_id)
 ```
 
@@ -98,6 +99,11 @@ Checkpoint formats are opaque to Ledger, for example
 `application/vnd.compforge.agentgo.message+json;version=1`. A Checkpoint may stand alone or anchor
 the last applied Event in a Lane; recovery then reads Events after that seq. See
 [Checkpoint](docs/checkpoint.md) for the full boundary and save contract.
+
+When a persisted Checkpoint is the safe terminal boundary of a Run, each Core SDK can append
+`lane.framework.checkpoint.linked` and `run.completed` in one atomic Lane batch. Run inspection
+then exposes terminal Events, linked Checkpoints, and unresolved Attempts without choosing an
+orchestrator status or recovery policy.
 
 Go applications inject an already configured GORM handle:
 

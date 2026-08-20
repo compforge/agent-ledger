@@ -128,6 +128,11 @@ Core lifecycle Event types are `session.started/completed`, `run.started/complet
 `attempt.requested/completed/failed`. The standard framework-state Events are
 `lane.framework.snapshot.saved` and `lane.framework.checkpoint.linked`.
 
+The Core payload of `lane.framework.checkpoint.linked` identifies the exact persisted Checkpoint
+with `checkpoint_id`, the recovery binding with `profile` and `profile_version`, and optional
+profile-owned `metadata`. A malformed or unknown payload remains an immutable Event; readers do
+not rewrite or silently promote it into a selected recovery point.
+
 Two-segment Event names are reserved for the Core vocabulary. Extension Events use
 `<subject-kind>.<namespace>.<name...>`, for example `lane.framework.pi.entry.appended`; custom Action
 types similarly use a namespace such as `framework.pi.branch_switch`. This naming rule prevents
@@ -188,11 +193,26 @@ native context, and unresolved-Attempt policy. The Store treats state as opaque 
 compaction state, queues, custom messages, or opaque checkpoints. RFC 0002 defines this adapter
 boundary; `docs/checkpoint.md` defines the save and anchor contract.
 
+If a Checkpoint is the safe terminal boundary of a Run, the adapter first saves that Checkpoint and
+then SHOULD append `lane.framework.checkpoint.linked` followed by `run.completed` in one atomic
+Lane batch, with the completion Event caused by the link Event. This prevents readers from
+observing that terminal execution fact without its recovery material reference. It does not make
+Checkpoint storage and Event append one transaction: a crash between them leaves an unlinked
+Checkpoint that may be reconciled or collected.
+
 ## Read models
 
-The append log is the source of execution facts. Timelines, unresolved-Attempt inspection,
-trajectories, and recovery plans are projections over Events plus immutable containment rows. They
-may be rebuilt without mutating Ledger history.
+The append log is the source of execution facts. `load_run(session_id, run_id)` returns a `RunView`
+containing only Lanes owned by that upstream pair and their Turns, Actions, Attempts, Events, and
+referenced Actors. It is a bounded read model, not an authoritative Run row. Timelines,
+unresolved-Attempt inspection, trajectories, and recovery plans are projections over Events plus
+immutable containment rows. They may be rebuilt without mutating Ledger history.
+
+Run inspection exposes all terminal Events, linked Checkpoints, and unresolved Attempts. It does
+not collapse conflicting terminal facts, select a Checkpoint, mark upstream input as processed, or
+decide retry, termination, scheduling, and acceptance. In particular, `run.completed` means the
+Harness execution completed; an orchestrator remains responsible for accepting that result into
+its own fenced control state.
 
 A cross-Lane Session timeline is an observation projection. Consumers use `causation_id` and
 containment relationships for explanation; they do not infer causality from display order. A

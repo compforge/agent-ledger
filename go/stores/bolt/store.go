@@ -552,6 +552,14 @@ func (s *Store) LoadSession(ctx context.Context, sessionID string) (agentledger.
 	return view, nil
 }
 
+func (s *Store) LoadRun(ctx context.Context, sessionID, runID string) (agentledger.RunView, error) {
+	view, err := s.LoadSession(ctx, sessionID)
+	if err != nil {
+		return agentledger.RunView{}, err
+	}
+	return agentledger.SelectRun(view, runID), nil
+}
+
 func observedBefore(left, right agentledger.StoredEvent) bool {
 	leftTime, leftErr := time.Parse(time.RFC3339Nano, left.CommittedAt)
 	rightTime, rightErr := time.Parse(time.RFC3339Nano, right.CommittedAt)

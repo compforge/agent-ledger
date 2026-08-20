@@ -24,6 +24,7 @@ type EventStore interface {
 	Append(context.Context, string, int64, string, ...ProposedEvent) (AppendReceipt, error)
 	LoadLane(context.Context, string, int64) iter.Seq2[StoredEvent, error]
 	LoadSession(context.Context, string) (SessionView, error)
+	LoadRun(context.Context, string, string) (RunView, error)
 }
 
 type CheckpointStore interface {

@@ -180,6 +180,21 @@ async def test_load_session_contains_structure_and_events(event_store: EventStor
     assert [item.id for item in view.events] == [requested.id]
 
 
+async def test_load_run_selects_only_the_requested_run(event_store: EventStore) -> None:
+    target = await lane(event_store, session_id="session", run_id="target")
+    other = await lane(event_store, session_id="session", run_id="other")
+    target_event = event(target)
+    other_event = event(other)
+    await event_store.append(target.id, 0, new_id(), [target_event])
+    await event_store.append(other.id, 0, new_id(), [other_event])
+
+    view = await event_store.load_run("session", "target")
+
+    assert view.run_id == "target"
+    assert [item.id for item in view.lanes] == [target.id]
+    assert [item.id for item in view.events] == [target_event.id]
+
+
 async def test_committed_event_content_is_immutable(event_store: EventStore) -> None:
     target = await lane(event_store)
     item = event(target)

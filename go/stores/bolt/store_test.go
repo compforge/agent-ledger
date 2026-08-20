@@ -61,4 +61,8 @@ func TestStorePersistsLane(t *testing.T) {
 	if err != nil || !ok || latest.ID != checkpoint.ID {
 		t.Fatalf("checkpoint = %#v, %v", latest, err)
 	}
+	runView, err := reopened.LoadRun(ctx, lane.SessionID, lane.RunID)
+	if err != nil || len(runView.Lanes) != 1 || len(runView.Events) != 1 {
+		t.Fatalf("run view = %#v, %v", runView, err)
+	}
 }

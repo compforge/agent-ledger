@@ -465,12 +465,36 @@ func (s *Store) LoadLane(ctx context.Context, laneID string, afterSeq int64) ite
 }
 
 func (s *Store) LoadSession(ctx context.Context, sessionID string) (agentledger.SessionView, error) {
+	view, err := s.loadView(ctx, sessionID, nil)
+	return agentledger.SessionView{
+		SessionID: view.SessionID,
+		Actors:    view.Actors,
+		Lanes:     view.Lanes,
+		Turns:     view.Turns,
+		Actions:   view.Actions,
+		Attempts:  view.Attempts,
+		Events:    view.Events,
+	}, err
+}
+
+func (s *Store) LoadRun(ctx context.Context, sessionID, runID string) (agentledger.RunView, error) {
+	return s.loadView(ctx, sessionID, &runID)
+}
+
+func (s *Store) loadView(ctx context.Context, sessionID string, runID *string) (agentledger.RunView, error) {
 	ctx, cancel := s.withTimeout(ctx)
 	defer cancel()
-	view := agentledger.SessionView{SessionID: sessionID}
+	view := agentledger.RunView{SessionID: sessionID}
+	if runID != nil {
+		view.RunID = *runID
+	}
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var lanes []laneRow
-		if err := tx.Where("session_id = ?", sessionID).Order("created_at, id").Find(&lanes).Error; err != nil {
+		query := tx.Where("session_id = ?", sessionID)
+		if runID != nil {
+			query = query.Where("run_id = ?", *runID)
+		}
+		if err := query.Order("created_at, id").Find(&lanes).Error; err != nil {
 			return err
 		}
 		if len(lanes) == 0 {

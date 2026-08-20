@@ -41,6 +41,7 @@ from agent_ledger.models import (
     Lane,
     ProposedCheckpoint,
     ProposedEvent,
+    RunView,
     SessionView,
     StoredEvent,
     Turn,
@@ -554,19 +555,30 @@ class SqlEventStore:
             yield _event_model(row)
 
     async def load_session(self, session_id: str) -> SessionView:
+        view = await self._load_view(session_id)
+        if not isinstance(view, SessionView):
+            raise AssertionError("session query returned a Run view")
+        return view
+
+    async def load_run(self, session_id: str, run_id: str) -> RunView:
+        view = await self._load_view(session_id, run_id)
+        if not isinstance(view, RunView):
+            raise AssertionError("run query returned a Session view")
+        return view
+
+    async def _load_view(self, session_id: str, run_id: str | None = None) -> SessionView | RunView:
         try:
             async with asyncio.timeout(self._operation_timeout):
                 async with AsyncSession(self._engine) as session:
-                    lane_rows = list(
-                        await session.scalars(
-                            select(_Lane)
-                            .where(_Lane.session_id == session_id)
-                            .order_by(_Lane.created_at)
-                        )
-                    )
+                    lane_query = select(_Lane).where(_Lane.session_id == session_id)
+                    if run_id is not None:
+                        lane_query = lane_query.where(_Lane.run_id == run_id)
+                    lane_rows = list(await session.scalars(lane_query.order_by(_Lane.created_at)))
                     lane_ids = [row.id for row in lane_rows]
                     if not lane_ids:
-                        return SessionView(session_id=session_id)
+                        if run_id is None:
+                            return SessionView(session_id=session_id)
+                        return RunView(session_id=session_id, run_id=run_id)
                     turn_rows = list(
                         await session.scalars(
                             select(_Turn)
@@ -612,17 +624,34 @@ class SqlEventStore:
                         else []
                     )
         except TimeoutError as error:
-            raise StoreError("SQL session read timed out") from error
+            raise StoreError("SQL execution view read timed out") from error
         except SQLAlchemyError as error:
-            raise StoreError("SQL session read failed") from error
-        return SessionView(
+            raise StoreError("SQL execution view read failed") from error
+        actors = tuple(_actor_model(row) for row in actor_rows)
+        lanes = tuple(_lane_model(row) for row in lane_rows)
+        turns = tuple(_turn_model(row) for row in turn_rows)
+        actions = tuple(_action_model(row) for row in action_rows)
+        attempts = tuple(_attempt_model(row) for row in attempt_rows)
+        events = tuple(_event_model(row) for row in event_rows)
+        if run_id is None:
+            return SessionView(
+                session_id=session_id,
+                actors=actors,
+                lanes=lanes,
+                turns=turns,
+                actions=actions,
+                attempts=attempts,
+                events=events,
+            )
+        return RunView(
             session_id=session_id,
-            actors=tuple(_actor_model(row) for row in actor_rows),
-            lanes=tuple(_lane_model(row) for row in lane_rows),
-            turns=tuple(_turn_model(row) for row in turn_rows),
-            actions=tuple(_action_model(row) for row in action_rows),
-            attempts=tuple(_attempt_model(row) for row in attempt_rows),
-            events=tuple(_event_model(row) for row in event_rows),
+            run_id=run_id,
+            actors=actors,
+            lanes=lanes,
+            turns=turns,
+            actions=actions,
+            attempts=attempts,
+            events=events,
         )
 
     async def _validate_subject(

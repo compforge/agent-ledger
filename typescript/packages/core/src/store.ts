@@ -7,6 +7,7 @@ import type {
   Lane,
   ProposedEvent,
   ProposedCheckpoint,
+  RunView,
   SessionView,
   StoredEvent,
   Turn,
@@ -30,6 +31,7 @@ export interface EventStore extends ActorStore {
   append(laneId: string, expectedLastSeq: number, appendId: string, events: readonly ProposedEvent[]): Promise<AppendReceipt>;
   loadLane(laneId: string, afterSeq?: number): AsyncIterable<StoredEvent>;
   loadSession(sessionId: string): Promise<SessionView>;
+  loadRun(sessionId: string, runId: string): Promise<RunView>;
 }
 
 export interface CheckpointStore extends ActorStore {
