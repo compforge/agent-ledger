@@ -2,18 +2,32 @@ package agentledger
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
-	"fmt"
+	"time"
 )
 
+// NewID returns an RFC 9562 UUIDv7.
 func NewID() string {
 	var value [16]byte
 	if _, err := rand.Read(value[:]); err != nil {
-		panic(fmt.Errorf("generate agent ledger id: %w", err))
+		panic("agentledger: crypto/rand failed: " + err.Error())
 	}
-	value[6] = (value[6] & 0x0f) | 0x40
+	millis := uint64(time.Now().UnixMilli())
+	var timestamp [8]byte
+	binary.BigEndian.PutUint64(timestamp[:], millis)
+	copy(value[0:6], timestamp[2:])
+	value[6] = (value[6] & 0x0f) | 0x70
 	value[8] = (value[8] & 0x3f) | 0x80
-	encoded := hex.EncodeToString(value[:])
-	return fmt.Sprintf("%s-%s-%s-%s-%s",
-		encoded[0:8], encoded[8:12], encoded[12:16], encoded[16:20], encoded[20:32])
+	var encoded [36]byte
+	hex.Encode(encoded[0:8], value[0:4])
+	encoded[8] = '-'
+	hex.Encode(encoded[9:13], value[4:6])
+	encoded[13] = '-'
+	hex.Encode(encoded[14:18], value[6:8])
+	encoded[18] = '-'
+	hex.Encode(encoded[19:23], value[8:10])
+	encoded[23] = '-'
+	hex.Encode(encoded[24:36], value[10:16])
+	return string(encoded[:])
 }

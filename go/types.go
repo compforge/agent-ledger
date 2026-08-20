@@ -1,57 +1,90 @@
 package agentledger
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type Actor struct {
 	Type      string `json:"type"`
 	ID        string `json:"id"`
 	Framework string `json:"framework,omitempty"`
+	CreatedAt string `json:"created_at"`
 }
 
-type EventStream struct {
-	SessionID string `json:"session_id"`
-	StreamID  string `json:"stream_id"`
+type Lane struct {
+	ID           string `json:"id"`
+	SessionID    string `json:"session_id"`
+	RunID        string `json:"run_id"`
+	Name         string `json:"name"`
+	ParentLaneID string `json:"parent_lane_id,omitempty"`
+	LastSeq      int64  `json:"last_seq"`
+	CreatedAt    string `json:"created_at"`
 }
 
-type CausalParent struct {
-	RunID           string
-	CausedByEventID string
+type Turn struct {
+	ID        string `json:"id"`
+	LaneID    string `json:"lane_id"`
+	CreatedAt string `json:"created_at"`
+}
+
+type Action struct {
+	ID             string `json:"id"`
+	TurnID         string `json:"turn_id"`
+	Type           string `json:"type"`
+	ParentActionID string `json:"parent_action_id,omitempty"`
+	CreatedAt      string `json:"created_at"`
+}
+
+type Attempt struct {
+	ID        string `json:"id"`
+	ActionID  string `json:"action_id"`
+	AttemptNo int    `json:"attempt_no"`
+	CreatedAt string `json:"created_at"`
 }
 
 type ProposedEvent struct {
-	SchemaVersion   string         `json:"schema_version"`
-	EventID         string         `json:"event_id"`
-	EventType       string         `json:"event_type"`
-	SessionID       string         `json:"session_id"`
-	RunID           string         `json:"run_id"`
-	Actor           Actor          `json:"actor"`
-	OccurredAt      string         `json:"occurred_at"`
-	StepID          string         `json:"step_id,omitempty"`
-	AttemptID       string         `json:"attempt_id,omitempty"`
-	ParentRunID     string         `json:"parent_run_id,omitempty"`
-	CausedByEventID string         `json:"caused_by_event_id,omitempty"`
-	Payload         map[string]any `json:"payload"`
-	Extensions      map[string]any `json:"extensions"`
+	SchemaVersion string         `json:"schema_version"`
+	ID            string         `json:"id"`
+	LaneID        string         `json:"lane_id"`
+	SubjectID     string         `json:"subject_id"`
+	EventType     string         `json:"event_type"`
+	ActorID       string         `json:"actor_id"`
+	CausationID   string         `json:"causation_id,omitempty"`
+	OccurredAt    string         `json:"occurred_at"`
+	Payload       map[string]any `json:"payload"`
+	Extensions    map[string]any `json:"extensions"`
+}
+
+func (e ProposedEvent) SubjectKind() string {
+	kind, _, _ := strings.Cut(e.EventType, ".")
+	return kind
 }
 
 type StoredEvent struct {
 	ProposedEvent
-	StreamID      string `json:"stream_id"`
-	StreamVersion int64  `json:"stream_version"`
-	CommitCursor  string `json:"commit_cursor"`
-	CommittedAt   string `json:"committed_at"`
+	Seq         int64  `json:"seq"`
+	CommittedAt string `json:"committed_at"`
 }
 
-type CommitReceipt struct {
-	Stream       EventStream `json:"stream"`
-	AppendID     string      `json:"append_id"`
-	Digest       string      `json:"digest"`
-	FirstVersion int64       `json:"first_version"`
-	LastVersion  int64       `json:"last_version"`
-	FirstCursor  string      `json:"first_cursor"`
-	LastCursor   string      `json:"last_cursor"`
-	EventIDs     []string    `json:"event_ids"`
-	CommittedAt  string      `json:"committed_at"`
+type AppendReceipt struct {
+	ID          string   `json:"id"`
+	LaneID      string   `json:"lane_id"`
+	Digest      string   `json:"digest"`
+	FirstSeq    int64    `json:"first_seq"`
+	LastSeq     int64    `json:"last_seq"`
+	EventIDs    []string `json:"event_ids"`
+	CommittedAt string   `json:"committed_at"`
+}
+
+type SessionView struct {
+	SessionID string        `json:"session_id"`
+	Actors    []Actor       `json:"actors"`
+	Lanes     []Lane        `json:"lanes"`
+	Turns     []Turn        `json:"turns"`
+	Actions   []Action      `json:"actions"`
+	Attempts  []Attempt     `json:"attempts"`
+	Events    []StoredEvent `json:"events"`
 }
 
 type AdapterCapabilities struct {
@@ -72,22 +105,44 @@ type AdapterDescriptor struct {
 }
 
 type AttemptHandle struct {
-	Kind             string
-	StepID           string
+	ActionType       string
+	TurnID           string
+	ActionID         string
 	AttemptID        string
+	AttemptNo        int
 	RequestedEventID string
 }
 
-func NewEvent(eventType, sessionID, runID string, actor Actor) ProposedEvent {
+func NewLane(sessionID, runID, name, parentLaneID string) Lane {
+	if name == "" {
+		name = "main"
+	}
+	return Lane{ID: NewID(), SessionID: sessionID, RunID: runID, Name: name, ParentLaneID: parentLaneID, CreatedAt: now()}
+}
+
+func NewActor(actorType, framework string) Actor {
+	return Actor{ID: NewID(), Type: actorType, Framework: framework, CreatedAt: now()}
+}
+
+func NewTurn(laneID string) Turn {
+	return Turn{ID: NewID(), LaneID: laneID, CreatedAt: now()}
+}
+
+func NewAction(turnID, actionType, parentActionID string) Action {
+	return Action{ID: NewID(), TurnID: turnID, Type: actionType, ParentActionID: parentActionID, CreatedAt: now()}
+}
+
+func NewAttempt(actionID string, attemptNo int) Attempt {
+	return Attempt{ID: NewID(), ActionID: actionID, AttemptNo: attemptNo, CreatedAt: now()}
+}
+
+func NewEvent(eventType, laneID, subjectID string, actor Actor) ProposedEvent {
 	return ProposedEvent{
 		SchemaVersion: "1.0",
-		EventID:       NewID(),
-		EventType:     eventType,
-		SessionID:     sessionID,
-		RunID:         runID,
-		Actor:         actor,
-		OccurredAt:    time.Now().UTC().Format(time.RFC3339Nano),
-		Payload:       map[string]any{},
-		Extensions:    map[string]any{},
+		ID:            NewID(), LaneID: laneID, SubjectID: subjectID, EventType: eventType,
+		ActorID:    actor.ID,
+		OccurredAt: now(), Payload: map[string]any{}, Extensions: map[string]any{},
 	}
 }
+
+func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }

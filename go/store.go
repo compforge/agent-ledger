@@ -6,7 +6,18 @@ import (
 )
 
 type EventStore interface {
-	Append(ctx context.Context, stream EventStream, expectedVersion int64, appendID string, events ...ProposedEvent) (CommitReceipt, error)
-	Load(ctx context.Context, stream EventStream, afterVersion int64) iter.Seq2[StoredEvent, error]
-	ScanSession(ctx context.Context, sessionID, afterCursor string) iter.Seq2[StoredEvent, error]
+	CreateActor(context.Context, Actor) error
+	GetActor(context.Context, string) (Actor, bool, error)
+	CreateLane(context.Context, Lane) error
+	GetLane(context.Context, string) (Lane, bool, error)
+	FindLane(context.Context, string, string, string) (Lane, bool, error)
+	CreateTurn(context.Context, Turn) error
+	GetTurn(context.Context, string) (Turn, bool, error)
+	CreateAction(context.Context, Action) error
+	GetAction(context.Context, string) (Action, bool, error)
+	CreateAttempt(context.Context, Attempt) error
+	GetAttempt(context.Context, string) (Attempt, bool, error)
+	Append(context.Context, string, int64, string, ...ProposedEvent) (AppendReceipt, error)
+	LoadLane(context.Context, string, int64) iter.Seq2[StoredEvent, error]
+	LoadSession(context.Context, string) (SessionView, error)
 }

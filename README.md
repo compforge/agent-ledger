@@ -1,90 +1,106 @@
 # Agent Ledger
 
-Agent Ledger is a framework-neutral specification and a set of polyglot adapters for durable agent
-execution records. Agent loops and orchestrators append to the same session history, producing a
-causal account of model calls, tool calls, delegation, framework-native state, and outcomes.
+Agent Ledger is a framework-neutral execution ledger for agent harnesses and orchestrators. It
+records immutable model calls, tool calls, harness operations, retries, delegation, native-state
+links, and outcomes so a host can audit execution, derive trajectories, and recover safely.
 
-The specification is the stable product. Language SDKs are deliberately small; most project code
-lives in adapters that understand a framework's hooks, messages, checkpoints, and resume APIs.
+The specification is the stable product. Language SDKs implement the same object and append
+contracts; framework adapters bind those contracts to concrete harness hooks and recovery APIs.
 
 ## Architecture position
 
-Agent Ledger is not another agent loop or workflow engine. It is a shared evidence layer across
-both:
+Agent Ledger is not an agent loop, workflow engine, scheduler, or universal checkpoint format.
 
 ```text
-Orchestrator ── decisions, delegation, approvals ──┐
-                                                   ├── Agent Ledger session
-Agent loops ── steps, attempts, native state ──────┘          │
-                                                              ├── recovery
-                                                              ├── global timeline
-                                                              └── analysis / evaluation
+Orchestrator ── Session / Run identity, delegation ──┐
+                                                    ├── Agent Ledger
+Harness ── Lane / Turn / Action / Attempt facts ────┘       │
+                                                            ├── audit
+Harness-native state ── checkpoint / resume API ────────────┼── recovery
+                                                            └── trajectory / eval
 ```
 
-An orchestrator owns desired state, scheduling, and run ownership. Each agent framework owns its
-native context and resume API. Agent Ledger owns the immutable facts that let those systems explain
-and reconstruct what happened.
+The orchestrator owns control state. Each harness owns its native state. Agent Ledger owns the
+append-only execution facts that connect them.
 
 ## Model
 
-- `Session` groups one end-to-end task across processes, languages, agents, and orchestration runs.
-- `Run` identifies one semantic execution by an agent or orchestrator and participates in the
-  causal DAG.
-- `EventStream` is an optimistic-concurrency partition. It may contain one run's execution events or
-  framework-native state that survives several runtime runs.
-- `Step` is logical work that survives retries; `Attempt` is one physical model or tool invocation.
-- Normalized events are the source for timelines and trajectories. Framework-native records are the
-  lossless input to framework-owned resume.
+```text
+Session → Run → Lane → Turn → Action → Attempt
+                         ↘ immutable Events
 
-Requested events are committed before an external call. A requested event without a terminal event
-is unresolved after a crash. It is input to the adapter's reconciliation policy; an adapter must
-not silently replay a side-effecting tool.
+Actor ────────────────────────────────↗
+```
+
+- `Session` is one upstream task; `Run` is one upstream harness execution.
+- `Lane` is one serial line inside a Run and the optimistic-concurrency boundary. A Run normally
+  has a `main` Lane and may have branch or framework-native-state Lanes.
+- `Turn` is a stable interaction boundary.
+- `Action` is logical work such as `model_call`, `tool_call`, or `compact`.
+- `Attempt` is one physical try of an Action; retrying creates a new `attempt_no`.
+- `Event` is an immutable lifecycle, input, output, or audit fact about any hierarchy subject.
+- `Actor` stores stable producer identity once; high-volume Events only retain `actor_id`.
+
+Session and Run IDs are supplied by the host. Ledger-owned IDs use UUIDv7. Requested Events are
+committed before external calls. A requested Attempt without a terminal Event is unresolved after
+a crash and must be reconciled; a side-effecting tool is never silently retried.
 
 ## Repository
 
 | Area | Responsibility |
 | --- | --- |
-| `spec/` | Event, append, adapter capability, and recovery contracts |
-| `conformance/` | Cross-language golden vectors and adapter contract tests |
-| `python/` | Python core SDK plus memory, Redis, and SQLAlchemy stores |
-| `typescript/` | TypeScript core SDK and Pi adapter |
-| `go/` | Go core SDK, memory/Bolt stores, and AgentGo adapter |
+| `spec/` | Object model, append semantics, adapter capabilities, recovery boundaries, reference SQL |
+| `conformance/` | Cross-language canonical encoding and digest vectors |
+| `python/` | Python SDK with Memory, Redis, and SQLAlchemy Stores |
+| `typescript/` | TypeScript SDK and Pi adapter |
+| `go/` | Go SDK with Memory, Bolt, and GORM Stores plus AgentGo adapter |
 
-Current framework profiles are integration examples, not definitions of the core session model:
-
-| Adapter | Recording | Recovery |
-| --- | --- | --- |
-| Pi AgentHarness | Awaited model/tool hooks | Ledger-backed Pi `SessionStorage` |
-| AgentGo | `ChatModel` wrapper, turn hooks, message committer, tool middleware | Native message codec with `HoldRuns` + `SetMessages` + `Continue` |
-| Plain Python loop | Explicit recorder calls | Snapshot plus tail replay |
-
-Every adapter publishes machine-readable capabilities such as `strict`, `best_effort`, and
-`unsupported`; installing a telemetry-only hook never silently claims durable recovery.
-
-Pi's append-only session tree is preserved in a dedicated framework stream because Pi needs it for
-lossless reconstruction. Its entry types, active leaf, and branching rules remain Pi-owned rather
-than becoming requirements for other agents or orchestrators.
+GORM and SQLAlchemy Stores accept application-owned database handles. SQLite is used in contract
+tests; production applications may inject MySQL or another supported relational driver. The SQL
+schema deliberately has no foreign-key constraints: Store implementations validate immutable
+ownership relationships in application code.
 
 ## Store contract
 
-Applications inject an `EventStore`. V1 has no mandatory collector or `/agent-session` service:
-framework processes write directly to an in-memory, Redis, or database implementation selected by
-the host.
+Applications inject an `EventStore`:
 
 ```text
-append(stream, expected_version, append_id, events)
-read_stream(stream, after_version)
-scan_session(session_id, after_cursor)
+create_actor / create_lane / create_turn / create_action / create_attempt
+append(lane_id, expected_last_seq, append_id, events)
+load_lane(lane_id, after_seq)
+load_session(session_id)
 ```
 
-Appends are atomic, idempotent by RFC 8785 canonical event content, and protected by optimistic
-concurrency. `commit_cursor` gives one session a display/pagination order; causal links, not cursor
-or timestamps, define execution relationships.
+An empty Lane has `last_seq = 0`; its first Event has `seq = 1`. Appends are atomic, idempotent by
+RFC 8785 canonical Event content, and protected by Lane-local optimistic concurrency. Event and
+append IDs are globally unique. `seq` orders one Lane only; cross-Lane display order never implies
+causality.
 
-Committed event history is append-only. `EventStore` does not update or delete accepted events;
-corrections and redactions are represented by later events. Internal version and cursor bookkeeping
-may change as new events arrive, while physical retention remains an explicit deployment policy
-outside the logical event contract.
+Committed Events are append-only. Corrections and redactions are later Events; physical retention
+is an explicit deployment policy outside the logical Store contract.
+
+Go applications inject an already configured GORM handle:
+
+```go
+db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+store, err := gormstore.New(db, 5*time.Second)
+err = store.Initialize(ctx)
+```
+
+The application remains responsible for driver choice, credentials, pool sizing, and connection
+lifecycle. `Initialize` creates the Ledger tables without foreign keys.
+
+## Framework adapters
+
+| Adapter | Recording | Recovery |
+| --- | --- | --- |
+| Pi AgentHarness | Awaited Turn, model, and tool hooks | Ledger-backed Pi `SessionStorage` Lane |
+| AgentGo | Model wrapper, Turn hooks, message committer, tool middleware | Native messages with `HoldRuns`, `SetMessages`, and `Continue` |
+| Plain Python loop | Explicit `LaneRecorder` calls | Snapshot plus completed-outcome replay |
+
+Every adapter publishes actual guarantees such as `strict`, `best_effort`, or `unsupported`.
+Normalized Events support inspection and trajectories; only a harness-native state binding may
+claim lossless recovery.
 
 ## Development
 
@@ -95,7 +111,5 @@ make test
 make build
 ```
 
-See [RFC 0001](spec/rfcs/0001-agent-ledger.md) for the ledger contract and
-[RFC 0002](spec/rfcs/0002-polyglot-adapters.md) for framework recording and recovery boundaries.
-The [orchestrated agents example](python/examples/orchestrated_agents.py) shows an orchestrator and
-multiple agent loops contributing to one causal session.
+See [RFC 0001](spec/rfcs/0001-agent-ledger.md) for the core contract and
+[RFC 0002](spec/rfcs/0002-polyglot-adapters.md) for adapter and recovery boundaries.

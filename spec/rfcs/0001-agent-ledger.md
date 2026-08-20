@@ -6,162 +6,180 @@ Draft specification for the `0.x` library line.
 
 ## Problem
 
-Agent loops can be interrupted by process replacement, autoscaling, model errors, and rate limits.
-Framework checkpoints solve recovery inside one runtime, but they do not necessarily provide a
-framework-neutral timeline across distributed agents and their orchestrator. Agent Ledger defines
-the durable execution facts that all of those producers can share while leaving framework state
-restoration and workflow control to their respective owners.
+Agent harnesses can be interrupted by process replacement, model failures, rate limits, and
+side-effecting tools. Framework-native checkpoints preserve harness context, but do not provide a
+framework-neutral, append-only account of what happened. Agent Ledger defines that execution
+account while leaving control state and harness state to their respective owners.
 
-## Concepts
+## Execution model
+
+```text
+Session → Run → Lane → Turn → Action → Attempt
+                         ↘ immutable Events
+
+Actor ────────────────────────────────↗
+```
 
 | Concept | Meaning |
 | --- | --- |
-| Session | End-to-end task and the boundary of the global timeline. It is not a framework-native chat session. |
-| Event Stream | One optimistic-concurrency partition inside a session. |
-| Run | One semantic execution by an agent, orchestrator, or other actor. |
-| Step | Logical work that survives retries. |
-| Attempt | One physical model or tool call within a step. |
-| Event | Immutable fact proposed by a producer and enriched by a store. |
-| Framework Adapter | Recording and recovery bindings for one framework. |
-| Trajectory | Read-side projection for evaluation or analysis. |
+| Session | One end-to-end task owned and identified by an upstream orchestrator. |
+| Run | One logical harness execution inside a Session, also identified upstream. Process recovery continues the same Run. |
+| Lane | One serial execution line inside a Run and the boundary for ordering and optimistic concurrency. |
+| Turn | One stable interaction or checkpoint boundary inside a Lane. |
+| Action | One logical harness action inside a Turn. Its concrete `type` is extensible, for example `model_call`, `tool_call`, or `compact`. |
+| Attempt | One physical try of an Action. Retries keep the Action and increment `attempt_no`. |
+| Actor | One stable producer or initiator identity referenced by Events. |
+| Event | An immutable fact about a Session, Run, Lane, Turn, Action, or Attempt. |
 
-When an orchestrator or agent delegates work, the child actor starts another run in the same
-session. Its `run.started` event carries `parent_run_id` and `caused_by_event_id`. The causal DAG,
-rather than wall-clock order, is the authoritative relationship between runs.
+A Run has one main Lane and may have additional Lanes for branches or framework-native records.
+Turns are serial within a Lane; different Lanes may progress independently. `main` is a Lane name,
+not a reserved identifier.
+
+Session and Run identities come from the upstream system. Agent Ledger does not create authoritative
+Session or Run rows. Ledger-owned Actor, Lane, Turn, Action, Attempt, Event, and append receipt
+identifiers are UUIDv7 values.
 
 ## Layer boundary
 
-Agent Ledger crosses the Agent Loop and Orchestrator layers without owning either one:
+- an agent harness records turns, actions, attempts, outcomes, and links to framework-native state;
+- an orchestrator supplies Session and Run identities while retaining desired state, scheduling,
+  leases, and reconciliation;
+- stores persist immutable execution identities and events, enforce Lane ordering, and validate
+  ownership links;
+- framework adapters persist and restore native harness state with the framework's own APIs;
+- readers derive timelines, recovery input, trajectories, alerts, and evaluation data.
 
-- an agent loop records steps, model and tool attempts, outcomes, and framework-native recovery
-  state;
-- an orchestrator records decisions, delegation, approvals, and execution outcomes while retaining
-  ownership of desired state, scheduling, leases, and reconciliation;
-- stores own atomic persistence, not agent or workflow semantics;
-- read-side consumers derive recovery input, timelines, trajectories, alerts, and evaluation data.
+The Ledger does not own an agent loop, construct a universal harness context, decide whether a
+result is correct, or activate learned prompts, tools, or skills.
 
-The ledger does not promote events into memory, change prompts or skills, decide whether a result
-is correct, or activate a new capability version. Those systems may record their decisions in the
-same session, but their policies remain outside the core library.
+## Entity contract
+
+Lane ownership is immutable: one Lane belongs to exactly one `(session_id, run_id)`. A Turn belongs
+to one Lane, an Action belongs to one Turn, and an Attempt belongs to one Action. `parent_lane_id`
+and `parent_action_id` express optional structural relationships without changing ownership.
+
+Entity tables describe identity and containment, not lifecycle status. Actor rows hold stable
+`type` and optional `framework` attributes so the high-volume Event table only repeats `actor_id`.
+Actor attributes are immutable; a semantic change creates a new Actor. Started, completed, failed,
+cancelled, checkpointed, and reconciled are immutable Events. The only mutable technical field in
+the core model is `Lane.last_seq`, which protects append ordering.
+
+SQL schemas intentionally omit foreign-key constraints. Stores MUST validate logical ownership on
+writes. This keeps migration, archival, partitioning, and cross-database operation independent from
+database-specific foreign-key behavior.
 
 ## Event envelope
 
-`spec/schemas/event.schema.json` is normative. Producers set the identity and causal fields. A
-store adds `stream_id`, `stream_version`, `commit_cursor`, and `committed_at` when the event is
-accepted.
+`spec/schemas/event.schema.json` is normative. Producers set the Event identity, Lane, subject,
+Actor reference, timestamp, payload, extensions, and optional causation link. A Store assigns `seq` and
+`committed_at` when accepting the Event.
 
-`occurred_at` is the producer timestamp. `committed_at` is the store timestamp. Neither field
-establishes causality.
+`subject_id` identifies the Session, Run, Lane, Turn, Action, or Attempt described by the Event.
+The first segment of `event_type` identifies that subject kind. Core and extension Event types
+therefore follow `<subject-kind>.<name>`, for example `attempt.requested`, `turn.completed`, or
+`lane.framework.pi.entry.appended`. A Store derives the subject kind from this prefix and verifies
+that `subject_id` resolves to the target Lane.
 
-Large inputs and outputs should use an `ArtifactRef`. The event keeps the content digest, media
-type, byte size, and URI while an application-selected `ArtifactStore` owns the bytes.
+Because Session and Run identifiers are upstream strings, `subject_id` is represented as a string
+for every subject kind. Valid ownership means:
 
-Core normalized event families use `session.*`, `run.*`, `step.*`, `model.*`, and `tool.*`.
-Framework-native records use `framework.<framework>.*`. Orchestrators and applications may add
-namespaced event types such as `orchestration.agent.dispatched`; readers preserve unknown event
-types and payloads.
+- a Session subject equals the Lane's `session_id`;
+- a Run subject equals the Lane's `run_id`;
+- a Lane subject equals the target `lane_id`;
+- a Turn, Action, or Attempt resolves through its immutable parents to the target Lane.
 
-### Run provenance
+`actor_id` references the Actor that performed or initiated the recorded action. It does not
+identify the adapter that wrote the Event. The referenced Actor carries an extensible `type` and
+optional `framework`; recommended types include `user`, `agent`, `orchestrator`, `harness`, `model`,
+`tool`, and `system`. Adapter-specific recording details belong in `extensions`.
 
-Analysis needs to know which system configuration produced a run. A `run.started` payload should
-therefore identify the agent or orchestrator implementation, framework and adapter versions, model,
-code revision, and relevant prompt, skill, toolset, dataset, or verifier versions or digests when
-they are known.
+`causation_id` optionally references the Event that caused the current fact. It is a logical Event
+reference, not a database foreign key. Timestamps and cross-Lane observation order never establish
+causality.
 
-Provenance stays in the run-start payload instead of being repeated in every envelope. Consumers
-join it to later events by `run_id`. V1 deliberately leaves the payload open while real adapters
-establish which references are portable enough to standardize.
+`payload` contains fact-specific data. `extensions` contains namespaced framework, vendor, or
+application additions outside the core contract. Readers MUST preserve unknown Event types,
+payload fields, and extensions.
+
+Large inputs and outputs SHOULD use an `ArtifactRef`. An application-selected Artifact Store owns
+the bytes; the Event keeps their digest, media type, size, and URI.
 
 ## Append contract
 
-The empty stream version is `-1`; the first stored event has version `0`. A stream is identified by
-`(session_id, stream_id)`. The physical `stream_id` is intentionally separate from the semantic
-`run_id`, so framework-native state can span runtime replacement.
+An empty Lane has `last_seq = 0`; its first accepted Event has `seq = 1`.
 
 ```python
-await store.append(stream, expected_version, append_id, events)
+await store.append(lane_id, expected_last_seq, append_id, events)
 ```
 
-The logical event history is append-only. After returning a commit receipt, an `EventStore` MUST
-NOT update or delete the accepted events through the store contract. Corrections and redactions
-MUST be represented by later events that reference the affected facts. Implementations may update
-internal version, cursor, and index records as they append new events. Physical archival or deletion
-under an explicit retention policy is outside the `EventStore` contract and MUST NOT rewrite the
-identity, content, or ordering metadata of retained events.
+The operation is one atomic batch:
 
-The operation is an atomic batch with these outcomes:
-
-1. If `append_id` was committed with identical canonical event content, return its original
-   receipt.
+1. If `append_id` was committed on the Lane with identical canonical Event content, return the
+   original receipt.
 2. If the same `append_id` names different content, fail with `IdempotencyViolation`.
-3. If `expected_version` differs from the event stream's current version, fail with
-   `StreamConflict`.
-4. Otherwise append all events contiguously or append none.
+3. If `expected_last_seq` differs from the Lane's current `last_seq`, fail with `LaneConflict`.
+4. Otherwise assign contiguous `seq` values, append all Events, update `last_seq`, and persist the
+   receipt in one transaction, or change nothing.
 
-`expected_version` is scoped to `(session_id, stream_id)`. A store must reject an event identifier
-already present in the same session; producers must generate globally unique event identifiers.
+The append digest is SHA-256 over RFC 8785 canonical JSON for the ordered proposed-Event array.
+Optional fields that are absent are omitted; explicit `null` remains part of the digest.
 
-The append digest is SHA-256 over the RFC 8785 canonical JSON encoding of the ordered proposed-event
-array. Optional fields that are absent are omitted; explicit `null` remains part of the digest.
+Event IDs and append IDs are globally unique. `(lane_id, seq)` and `(action_id, attempt_no)` are
+unique. A Store snapshots caller-owned input and MUST NOT expose
+mutable references that can rewrite accepted history.
 
-`commit_cursor` is an opaque, session-scoped pagination token. Consumers must not compare cursors
-from different sessions or infer causality from cursor order.
-
-Live tailing is an optional store extension, not part of the V1 `EventStore`: Redis Pub/Sub,
-database polling, and CDC provide materially different delivery guarantees. Portable consumers use
-`scan_session` with the last durable cursor and may layer a wake-up signal on top.
+`seq` is authoritative only inside its Lane. UUIDv7 creation time, wall-clock timestamps, and a
+read-side merge of multiple Lanes are useful for observation but do not create a global causal
+order.
 
 ## Write-before-execute
 
-Framework hooks must await `model.requested` or `tool.requested` before invoking the external
-operation. If that append fails, the call must not start. The completed or failed outcome must be
-appended before the loop advances.
+For a model or tool Action, an adapter creates an Attempt and durably appends
+`attempt.requested` before invoking the external operation. It appends `attempt.completed` or
+`attempt.failed` before the harness advances.
 
-After a crash, a requested event without a terminal event represents an unresolved attempt. The
-framework adapter decides whether to query an external provider, ask for confirmation, mark the
-attempt failed, or retry with a new `attempt_id`. Repeating a tool automatically is unsafe because
-the first call may have produced a side effect.
-
-Retries keep the same `step_id` and use a new `attempt_id`.
+A requested Attempt without a terminal Event is unresolved after a crash. Recovery may query the
+provider, apply a known completed result, abandon the old Attempt and create the next `attempt_no`,
+or ask for human resolution. A side-effecting tool MUST NOT be silently retried.
 
 ## Framework recovery
 
-The core library can find stream gaps, unresolved attempts, and run-parent edges. It does not
-construct a generic run context. A framework adapter defines:
+Agent Ledger and harness-native state are complementary:
 
-- hook-to-event mappings;
-- snapshot/checkpoint encoding;
-- reconstruction of the framework's native context;
-- policy for unresolved attempts.
+```text
+restore native checkpoint
++ replay recorded completed outcomes after that checkpoint
++ reconcile unresolved Attempts
++ continue the unfinished Turn
+```
 
-The bundled plain-loop profile demonstrates snapshot recovery. Frameworks with native storage or
-checkpointing preserve that state losslessly and restore with their own APIs. RFC 0002 defines the
-recording/recovery split and capability declarations.
+The framework adapter owns checkpoint encoding, restoration, replay into native context, and
+unresolved-Attempt policy. Normalized Events alone are not claimed to rebuild contexts containing
+branches, compaction state, queues, custom messages, or opaque checkpoints. RFC 0002 defines this
+adapter boundary.
 
-## Read models and projections
+## Read models
 
-The append log is the source of truth; recovery and analysis are independent projections:
+The append log is the source of execution facts. Timelines, unresolved-Attempt inspection,
+trajectories, and recovery plans are projections over Events plus immutable containment rows. They
+may be rebuilt without mutating Ledger history.
 
-- a framework adapter combines native records with normalized attempts to restore its own context;
-- a session timeline merges all event streams for display, then uses causal links to explain the
-  relationship between actors;
-- trajectory exporters select normalized steps and attempts for evaluation or training;
-- memory and capability-improvement pipelines consume only facts accepted by their own validation
-  and approval policies.
-
-No projection may rewrite historical events or claim that commit order establishes causality.
+A cross-Lane Session timeline is an observation projection. Consumers use `causation_id` and
+containment relationships for explanation; they do not infer causality from display order. A
+projection MUST preserve `seq` order within each Lane even when several appends share the same
+wall-clock timestamp.
 
 ## Store durability
 
-An append receipt means the selected store accepted the transaction. End-to-end durability still
-depends on deployment configuration: Redis persistence/replication/failover or database commit and
-backup guarantees. Client pools and operation timeouts are application configuration, not hidden
-library defaults.
+An append receipt means the selected Store accepted the transaction. End-to-end durability still
+depends on database, Redis, or embedded-store configuration and backup policy. Client pools and
+operation timeouts are explicit application configuration.
 
-Run ownership is external. Optimistic concurrency prevents two writers from both advancing a
-stream, but leases, fencing, and scheduling belong to the orchestrator.
+Run ownership is external. Lane OCC prevents two writers from both advancing one Lane, but leases,
+fencing, scheduling, and multi-agent orchestration remain outside Agent Ledger.
 
 ## Compatibility
 
-Readers must reject unsupported major schema versions and should preserve unknown event types,
-payload fields, and `extensions`. Additive fields are permitted within a major version.
+Readers reject unsupported major schema versions and preserve unknown extensible values. Additive
+fields are permitted within a major version. The SQL layout is a reference persistence shape; the
+Event JSON Schema and behavioral append contract define cross-language compatibility.

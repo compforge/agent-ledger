@@ -1,90 +1,201 @@
 import { canonicalAppendDigest } from "./canonical.js";
 import type { EventStore } from "./store.js";
-import type { CommitReceipt, EventStream, ProposedEvent, StoredEvent } from "./types.js";
+import type {
+  Action, Actor, AppendReceipt, Attempt, Lane, ProposedEvent, SessionView, StoredEvent, Turn,
+} from "./types.js";
 
-export class StreamConflict extends Error {}
+export class LaneConflict extends Error {}
 export class IdempotencyViolation extends Error {}
 export class DuplicateEvent extends Error {}
+export class EntityConflict extends Error {}
+export class EntityNotFound extends Error {}
+export class SubjectMismatch extends Error {}
 
 export class MemoryEventStore implements EventStore {
-  readonly #streams = new Map<string, StoredEvent[]>();
-  readonly #sessions = new Map<string, StoredEvent[]>();
-  readonly #receipts = new Map<string, CommitReceipt>();
-  readonly #eventIds = new Set<string>();
+  readonly #actors = new Map<string, Actor>();
+  readonly #lanes = new Map<string, Lane>();
+  readonly #laneNames = new Map<string, string>();
+  readonly #turns = new Map<string, Turn>();
+  readonly #actions = new Map<string, Action>();
+  readonly #attempts = new Map<string, Attempt>();
+  readonly #attemptNumbers = new Set<string>();
+  readonly #events = new Map<string, StoredEvent>();
+  readonly #laneEvents = new Map<string, StoredEvent[]>();
+  readonly #appends = new Map<string, AppendReceipt>();
+
+  async createActor(actor: Actor): Promise<void> {
+    this.#create(this.#actors, "actor", actor.id, actor);
+  }
+
+  async getActor(id: string): Promise<Actor | undefined> {
+    return cloneOptional(this.#actors.get(id));
+  }
+
+  async createLane(lane: Lane): Promise<void> {
+    if (lane.last_seq !== 0) throw new TypeError("new lane must have last_seq 0");
+    if (this.#lanes.has(lane.id) || this.#laneNames.has(laneNameKey(lane.session_id, lane.run_id, lane.name))) {
+      throw new EntityConflict(`lane ${lane.id}`);
+    }
+    if (lane.parent_lane_id !== undefined) {
+      const parent = this.#lanes.get(lane.parent_lane_id);
+      if (!parent) throw new EntityNotFound(`parent lane ${lane.parent_lane_id}`);
+      if (parent.session_id !== lane.session_id) throw new TypeError("parent lane must belong to same session");
+    }
+    this.#lanes.set(lane.id, structuredClone(lane));
+    this.#laneNames.set(laneNameKey(lane.session_id, lane.run_id, lane.name), lane.id);
+  }
+
+  async getLane(id: string): Promise<Lane | undefined> {
+    return cloneOptional(this.#lanes.get(id));
+  }
+
+  async findLane(sessionId: string, runId: string, name: string): Promise<Lane | undefined> {
+    const id = this.#laneNames.get(laneNameKey(sessionId, runId, name));
+    return id === undefined ? undefined : structuredClone(this.#lanes.get(id)!);
+  }
+
+  async createTurn(turn: Turn): Promise<void> {
+    if (!this.#lanes.has(turn.lane_id)) throw new EntityNotFound(`lane ${turn.lane_id}`);
+    this.#create(this.#turns, "turn", turn.id, turn);
+  }
+
+  async getTurn(id: string): Promise<Turn | undefined> {
+    return cloneOptional(this.#turns.get(id));
+  }
+
+  async createAction(action: Action): Promise<void> {
+    if (!this.#turns.has(action.turn_id)) throw new EntityNotFound(`turn ${action.turn_id}`);
+    if (action.parent_action_id !== undefined) {
+      const parent = this.#actions.get(action.parent_action_id);
+      if (!parent) throw new EntityNotFound(`parent action ${action.parent_action_id}`);
+      if (parent.turn_id !== action.turn_id) throw new TypeError("parent action must belong to same turn");
+    }
+    this.#create(this.#actions, "action", action.id, action);
+  }
+
+  async getAction(id: string): Promise<Action | undefined> {
+    return cloneOptional(this.#actions.get(id));
+  }
+
+  async createAttempt(attempt: Attempt): Promise<void> {
+    if (attempt.attempt_no < 1) throw new TypeError("attempt_no must be positive");
+    if (!this.#actions.has(attempt.action_id)) throw new EntityNotFound(`action ${attempt.action_id}`);
+    const numberKey = `${attempt.action_id}\u0000${attempt.attempt_no}`;
+    if (this.#attemptNumbers.has(numberKey)) throw new EntityConflict(`attempt ${attempt.id}`);
+    this.#create(this.#attempts, "attempt", attempt.id, attempt);
+    this.#attemptNumbers.add(numberKey);
+  }
+
+  async getAttempt(id: string): Promise<Attempt | undefined> {
+    return cloneOptional(this.#attempts.get(id));
+  }
 
   async append(
-    stream: EventStream,
-    expectedVersion: number,
+    laneId: string,
+    expectedLastSeq: number,
     appendId: string,
     events: readonly ProposedEvent[],
-  ): Promise<CommitReceipt> {
-    if (events.length === 0) throw new TypeError("append requires at least one event");
-    if (events.some((event) => event.session_id !== stream.session_id)) {
-      throw new TypeError("all events must belong to the target stream's session");
-    }
+  ): Promise<AppendReceipt> {
+    if (expectedLastSeq < 0) throw new TypeError("expectedLastSeq must be non-negative");
+    if (appendId === "" || events.length === 0) throw new TypeError("append requires an id and at least one event");
     const batch = structuredClone(events) as ProposedEvent[];
     const digest = canonicalAppendDigest(batch);
-    const receiptKey = `${stream.session_id}\u0000${stream.stream_id}\u0000${appendId}`;
-    const previous = this.#receipts.get(receiptKey);
+    const previous = this.#appends.get(appendId);
     if (previous) {
-      if (previous.digest !== digest) throw new IdempotencyViolation(appendId);
+      if (previous.lane_id !== laneId || previous.digest !== digest) throw new IdempotencyViolation(appendId);
       return structuredClone(previous);
     }
-    const streamKey = `${stream.session_id}\u0000${stream.stream_id}`;
-    const current = this.#streams.get(streamKey) ?? [];
-    if (current.length - 1 !== expectedVersion) throw new StreamConflict(stream.stream_id);
-    const batchEventIds = new Set<string>();
+    const lane = this.#lanes.get(laneId);
+    if (!lane) throw new EntityNotFound(`lane ${laneId}`);
+    if (lane.last_seq !== expectedLastSeq) throw new LaneConflict(laneId);
+    const prior = new Set(this.#events.keys());
+    const batchIds = new Set<string>();
     for (const event of batch) {
-      if (batchEventIds.has(event.event_id)) throw new DuplicateEvent(event.event_id);
-      batchEventIds.add(event.event_id);
-      if (this.#eventIds.has(eventKey(stream.session_id, event.event_id))) {
-        throw new DuplicateEvent(event.event_id);
+      if (event.lane_id !== laneId) throw new TypeError("all events must belong to target lane");
+      if (batchIds.has(event.id) || this.#events.has(event.id)) throw new DuplicateEvent(event.id);
+      batchIds.add(event.id);
+      if (!this.#actors.has(event.actor_id)) throw new EntityNotFound(`actor ${event.actor_id}`);
+      if (!this.#validSubject(lane, event)) throw new SubjectMismatch(event.id);
+      if (event.causation_id !== undefined) {
+        if (!prior.has(event.causation_id)) throw new EntityNotFound(`causation event ${event.causation_id}`);
+        const caused = this.#events.get(event.causation_id);
+        if (caused && this.#lanes.get(caused.lane_id)?.session_id !== lane.session_id) {
+          throw new SubjectMismatch(event.id);
+        }
       }
+      prior.add(event.id);
     }
 
-    const session = this.#sessions.get(stream.session_id) ?? [];
     const committedAt = new Date().toISOString();
-    const stored = batch.map((event, offset): StoredEvent => ({
-      ...event,
-      stream_id: stream.stream_id,
-      stream_version: expectedVersion + offset + 1,
-      commit_cursor: String(session.length + offset),
-      committed_at: committedAt,
+    const stored = batch.map((event, index): StoredEvent => ({
+      ...event, seq: lane.last_seq + index + 1, committed_at: committedAt,
     }));
-    const receipt: CommitReceipt = {
-      stream: structuredClone(stream),
-      append_id: appendId,
-      digest,
-      first_version: stored[0]!.stream_version,
-      last_version: stored.at(-1)!.stream_version,
-      first_cursor: stored[0]!.commit_cursor,
-      last_cursor: stored.at(-1)!.commit_cursor,
-      event_ids: stored.map((event) => event.event_id),
-      committed_at: committedAt,
+    const receipt: AppendReceipt = {
+      id: appendId, lane_id: laneId, digest, first_seq: stored[0]!.seq,
+      last_seq: stored.at(-1)!.seq, event_ids: stored.map((event) => event.id), committed_at: committedAt,
     };
-    this.#streams.set(streamKey, [...current, ...stored]);
-    this.#sessions.set(stream.session_id, [...session, ...stored]);
-    for (const event of stored) this.#eventIds.add(eventKey(stream.session_id, event.event_id));
-    this.#receipts.set(receiptKey, receipt);
+    for (const event of stored) this.#events.set(event.id, event);
+    lane.last_seq = receipt.last_seq;
+    this.#laneEvents.set(laneId, [...(this.#laneEvents.get(laneId) ?? []), ...stored]);
+    this.#appends.set(appendId, receipt);
     return structuredClone(receipt);
   }
 
-  async *readStream(stream: EventStream, afterVersion = -1): AsyncIterable<StoredEvent> {
-    const key = `${stream.session_id}\u0000${stream.stream_id}`;
-    for (const event of this.#streams.get(key) ?? []) {
-      if (event.stream_version > afterVersion) yield structuredClone(event);
+  async *loadLane(laneId: string, afterSeq = 0): AsyncIterable<StoredEvent> {
+    if (afterSeq < 0) throw new TypeError("afterSeq must be non-negative");
+    if (!this.#lanes.has(laneId)) throw new EntityNotFound(`lane ${laneId}`);
+    for (const event of this.#laneEvents.get(laneId) ?? []) {
+      if (event.seq > afterSeq) yield structuredClone(event);
     }
   }
 
-  async *scanSession(sessionId: string, afterCursor = "-1"): AsyncIterable<StoredEvent> {
-    const cursor = Number.parseInt(afterCursor, 10);
-    if (!Number.isInteger(cursor) || cursor < -1) throw new TypeError(`invalid cursor ${afterCursor}`);
-    for (const event of this.#sessions.get(sessionId) ?? []) {
-      if (Number.parseInt(event.commit_cursor, 10) > cursor) yield structuredClone(event);
+  async loadSession(sessionId: string): Promise<SessionView> {
+    const lanes = [...this.#lanes.values()].filter((lane) => lane.session_id === sessionId);
+    const laneIds = new Set(lanes.map((lane) => lane.id));
+    const turns = [...this.#turns.values()].filter((turn) => laneIds.has(turn.lane_id));
+    const turnIds = new Set(turns.map((turn) => turn.id));
+    const actions = [...this.#actions.values()].filter((action) => turnIds.has(action.turn_id));
+    const actionIds = new Set(actions.map((action) => action.id));
+    const attempts = [...this.#attempts.values()].filter((attempt) => actionIds.has(attempt.action_id));
+    const events = [...this.#events.values()]
+      .filter((event) => laneIds.has(event.lane_id))
+      .sort((left, right) => left.committed_at.localeCompare(right.committed_at)
+        || left.lane_id.localeCompare(right.lane_id)
+        || left.seq - right.seq
+        || left.id.localeCompare(right.id));
+    const actorIds = new Set(events.map((event) => event.actor_id));
+    const actors = [...this.#actors.values()].filter((actor) => actorIds.has(actor.id));
+    return structuredClone({ session_id: sessionId, actors, lanes, turns, actions, attempts, events });
+  }
+
+  #create<T>(target: Map<string, T>, kind: string, id: string, value: T): void {
+    if (target.has(id)) throw new EntityConflict(`${kind} ${id}`);
+    target.set(id, structuredClone(value));
+  }
+
+  #validSubject(lane: Lane, event: ProposedEvent): boolean {
+    const kind = event.event_type.split(".", 1)[0];
+    if (kind === "session") return event.subject_id === lane.session_id;
+    if (kind === "run") return event.subject_id === lane.run_id;
+    if (kind === "lane") return event.subject_id === lane.id;
+    if (kind === "turn") return this.#turns.get(event.subject_id)?.lane_id === lane.id;
+    if (kind === "action") {
+      const action = this.#actions.get(event.subject_id);
+      return action !== undefined && this.#turns.get(action.turn_id)?.lane_id === lane.id;
     }
+    if (kind === "attempt") {
+      const attempt = this.#attempts.get(event.subject_id);
+      const action = attempt === undefined ? undefined : this.#actions.get(attempt.action_id);
+      return action !== undefined && this.#turns.get(action.turn_id)?.lane_id === lane.id;
+    }
+    return false;
   }
 }
 
-function eventKey(sessionId: string, eventId: string): string {
-  return `${sessionId}\u0000${eventId}`;
+function laneNameKey(sessionId: string, runId: string, name: string): string {
+  return `${sessionId}\u0000${runId}\u0000${name}`;
+}
+
+function cloneOptional<T>(value: T | undefined): T | undefined {
+  return value === undefined ? undefined : structuredClone(value);
 }

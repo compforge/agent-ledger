@@ -1,9 +1,8 @@
-from collections.abc import Sequence
 from typing import Generic, Protocol, TypeVar
 
 from agent_ledger.adapters import AdapterDescriptor
-from agent_ledger.models import StoredEvent
-from agent_ledger.recorder import SessionRecorder
+from agent_ledger.models import SessionView, StoredEvent
+from agent_ledger.recorder import LaneRecorder
 
 ContextT = TypeVar("ContextT")
 
@@ -13,6 +12,6 @@ class StateAdapter(Protocol, Generic[ContextT]):
 
     descriptor: AdapterDescriptor
 
-    async def save(self, recorder: SessionRecorder, context: ContextT) -> StoredEvent: ...
+    async def save(self, recorder: LaneRecorder, context: ContextT) -> StoredEvent: ...
 
-    def restore(self, events: Sequence[StoredEvent]) -> ContextT: ...
+    def restore(self, view: SessionView, lane_id: str) -> ContextT: ...

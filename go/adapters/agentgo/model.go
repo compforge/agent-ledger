@@ -14,7 +14,11 @@ type recordingModel struct {
 }
 
 func (m *recordingModel) Generate(ctx context.Context, messages []agentgo.Message, tools []agentgo.ToolSpec, options ...agentgo.CallOption) (*agentgo.LLMResponse, error) {
-	attempt, err := m.adapter.runtimeRecorder.BeforeModelCall(ctx, m.adapter.stepID(), modelPayload(messages, tools))
+	turnID, err := m.adapter.turnID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	attempt, err := m.adapter.runtimeRecorder.BeforeModelCall(ctx, turnID, modelPayload(messages, tools))
 	if err != nil {
 		return nil, fmt.Errorf("record agentgo model request: %w", err)
 	}
@@ -32,7 +36,11 @@ func (m *recordingModel) Generate(ctx context.Context, messages []agentgo.Messag
 }
 
 func (m *recordingModel) GenerateStream(ctx context.Context, messages []agentgo.Message, tools []agentgo.ToolSpec, options ...agentgo.CallOption) (<-chan agentgo.StreamEvent, error) {
-	attempt, err := m.adapter.runtimeRecorder.BeforeModelCall(ctx, m.adapter.stepID(), modelPayload(messages, tools))
+	turnID, err := m.adapter.turnID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	attempt, err := m.adapter.runtimeRecorder.BeforeModelCall(ctx, turnID, modelPayload(messages, tools))
 	if err != nil {
 		return nil, fmt.Errorf("record agentgo model request: %w", err)
 	}
@@ -77,7 +85,6 @@ func (m *recordingModel) GenerateStream(ctx context.Context, messages []agentgo.
 			select {
 			case output <- agentgo.StreamEvent{Type: agentgo.StreamEventError, Err: failure}:
 			case <-ctx.Done():
-				return
 			}
 		}
 	}()

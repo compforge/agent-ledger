@@ -8,152 +8,245 @@ import (
 )
 
 type RecorderOptions struct {
-	Store           EventStore
-	SessionID       string
-	RunID           string
-	StreamID        string
-	Actor           Actor
-	Parent          *CausalParent
-	ExpectedVersion *int64
+	Store          EventStore
+	SessionID      string
+	RunID          string
+	LaneID         string
+	LaneName       string
+	Actor          Actor
+	ParentLaneID   string
+	ParentRunID    string
+	RunCausationID string
 }
 
-type SessionRecorder struct {
+type LaneRecorder struct {
 	store           EventStore
-	stream          EventStream
-	runID           string
+	lane            Lane
 	actor           Actor
-	parent          *CausalParent
-	expectedVersion int64
+	parentRunID     string
+	runCausationID  string
+	expectedLastSeq int64
 	mu              sync.Mutex
 }
 
-func NewSessionRecorder(options RecorderOptions) *SessionRecorder {
-	streamID := options.StreamID
-	if streamID == "" {
-		streamID = options.RunID
+func OpenRecorder(ctx context.Context, options RecorderOptions) (*LaneRecorder, error) {
+	if options.Store == nil {
+		return nil, errors.New("recorder requires an event store")
 	}
-	expectedVersion := int64(-1)
-	if options.ExpectedVersion != nil {
-		expectedVersion = *options.ExpectedVersion
+	if options.LaneName == "" {
+		options.LaneName = "main"
 	}
-	var parent *CausalParent
-	if options.Parent != nil {
-		copy := *options.Parent
-		parent = &copy
-	}
-	return &SessionRecorder{
-		store:           options.Store,
-		stream:          EventStream{SessionID: options.SessionID, StreamID: streamID},
-		runID:           options.RunID,
-		actor:           options.Actor,
-		parent:          parent,
-		expectedVersion: expectedVersion,
-	}
-}
-
-func ResumeRecorder(ctx context.Context, options RecorderOptions) (*SessionRecorder, error) {
-	if options.ExpectedVersion != nil {
-		return nil, errors.New("resume recorder discovers the stream head; expected version must be nil")
-	}
-	recorder := NewSessionRecorder(options)
-	expectedVersion := int64(-1)
-	for event, err := range options.Store.Load(ctx, recorder.stream, -1) {
-		if err != nil {
-			return nil, fmt.Errorf("load recorder stream: %w", err)
-		}
-		expectedVersion = event.StreamVersion
-	}
-	recorder.expectedVersion = expectedVersion
-	return recorder, nil
-}
-
-func (r *SessionRecorder) Stream() EventStream { return r.stream }
-func (r *SessionRecorder) RunID() string       { return r.runID }
-func (r *SessionRecorder) Store() EventStore   { return r.store }
-
-func (r *SessionRecorder) Record(ctx context.Context, eventType string, payload map[string]any, stepID, attemptID string) (StoredEvent, error) {
-	event := NewEvent(eventType, r.stream.SessionID, r.runID, r.actor)
-	event.Payload = payloadOrEmpty(payload)
-	event.StepID = stepID
-	event.AttemptID = attemptID
-	return r.appendEvent(ctx, event)
-}
-
-func (r *SessionRecorder) StartRun(ctx context.Context, payload map[string]any) (StoredEvent, error) {
-	event := NewEvent("run.started", r.stream.SessionID, r.runID, r.actor)
-	event.Payload = payloadOrEmpty(payload)
-	if r.parent != nil {
-		event.ParentRunID = r.parent.RunID
-		event.CausedByEventID = r.parent.CausedByEventID
-	}
-	return r.appendEvent(ctx, event)
-}
-
-func (r *SessionRecorder) Child(runID string, actor Actor, causedByEventID string) *SessionRecorder {
-	return NewSessionRecorder(RecorderOptions{
-		Store:     r.store,
-		SessionID: r.stream.SessionID,
-		RunID:     runID,
-		Actor:     actor,
-		Parent: &CausalParent{
-			RunID:           r.runID,
-			CausedByEventID: causedByEventID,
-		},
-	})
-}
-
-func (r *SessionRecorder) appendEvent(ctx context.Context, event ProposedEvent) (StoredEvent, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	receipt, err := r.store.Append(ctx, r.stream, r.expectedVersion, NewID(), event)
+	storedActor, exists, err := options.Store.GetActor(ctx, options.Actor.ID)
 	if err != nil {
-		return StoredEvent{}, err
+		return nil, fmt.Errorf("get recorder actor: %w", err)
 	}
-	r.expectedVersion = receipt.LastVersion
-	return StoredEvent{
-		ProposedEvent: event,
-		StreamID:      r.stream.StreamID,
-		StreamVersion: receipt.FirstVersion,
-		CommitCursor:  receipt.FirstCursor,
-		CommittedAt:   receipt.CommittedAt,
+	if !exists {
+		if err := options.Store.CreateActor(ctx, options.Actor); err != nil {
+			return nil, fmt.Errorf("create recorder actor: %w", err)
+		}
+	} else if storedActor.Type != options.Actor.Type || storedActor.Framework != options.Actor.Framework {
+		return nil, fmt.Errorf("%w: actor %s", ErrEntityConflict, options.Actor.ID)
+	}
+
+	var lane Lane
+	if options.LaneID != "" {
+		lane, exists, err = options.Store.GetLane(ctx, options.LaneID)
+		if err != nil {
+			return nil, fmt.Errorf("get recorder lane: %w", err)
+		}
+		if !exists {
+			lane = NewLane(options.SessionID, options.RunID, options.LaneName, options.ParentLaneID)
+			lane.ID = options.LaneID
+			if err := options.Store.CreateLane(ctx, lane); err != nil {
+				return nil, fmt.Errorf("create recorder lane: %w", err)
+			}
+		}
+	} else {
+		lane, exists, err = options.Store.FindLane(ctx, options.SessionID, options.RunID, options.LaneName)
+		if err != nil {
+			return nil, fmt.Errorf("find recorder lane: %w", err)
+		}
+		if !exists {
+			candidate := NewLane(options.SessionID, options.RunID, options.LaneName, options.ParentLaneID)
+			if createErr := options.Store.CreateLane(ctx, candidate); createErr != nil {
+				if !errors.Is(createErr, ErrEntityConflict) {
+					return nil, fmt.Errorf("create recorder lane: %w", createErr)
+				}
+				lane, exists, err = options.Store.FindLane(ctx, options.SessionID, options.RunID, options.LaneName)
+				if err != nil || !exists {
+					return nil, fmt.Errorf("find concurrently created recorder lane: %w", err)
+				}
+			} else {
+				lane = candidate
+			}
+		}
+	}
+	if lane.SessionID != options.SessionID || lane.RunID != options.RunID || lane.Name != options.LaneName {
+		return nil, errors.New("lane identity does not match recorder options")
+	}
+	if options.ParentLaneID != "" && lane.ParentLaneID != options.ParentLaneID {
+		return nil, errors.New("lane parent does not match recorder options")
+	}
+	return &LaneRecorder{
+		store: options.Store, lane: lane, actor: options.Actor,
+		parentRunID: options.ParentRunID, runCausationID: options.RunCausationID,
+		expectedLastSeq: lane.LastSeq,
 	}, nil
 }
 
-func (r *SessionRecorder) BeforeModelCall(ctx context.Context, stepID string, payload map[string]any) (AttemptHandle, error) {
-	return r.beforeCall(ctx, "model", stepID, payload)
+func (r *LaneRecorder) Store() EventStore { return r.store }
+func (r *LaneRecorder) Lane() Lane        { return r.lane }
+func (r *LaneRecorder) RunID() string     { return r.lane.RunID }
+func (r *LaneRecorder) SessionID() string { return r.lane.SessionID }
+
+func (r *LaneRecorder) Record(ctx context.Context, eventType, subjectID string, payload map[string]any, causationID string) (StoredEvent, error) {
+	event := NewEvent(eventType, r.lane.ID, subjectID, r.actor)
+	event.Payload = payloadOrEmpty(payload)
+	event.CausationID = causationID
+	return r.appendEvent(ctx, event)
 }
 
-func (r *SessionRecorder) BeforeToolCall(ctx context.Context, stepID string, payload map[string]any) (AttemptHandle, error) {
-	return r.beforeCall(ctx, "tool", stepID, payload)
+func (r *LaneRecorder) StartRun(ctx context.Context, payload map[string]any) (StoredEvent, error) {
+	payload = payloadOrEmpty(payload)
+	if r.parentRunID != "" {
+		payload["parent_run_id"] = r.parentRunID
+	}
+	return r.Record(ctx, "run.started", r.lane.RunID, payload, r.runCausationID)
 }
 
-func (r *SessionRecorder) ModelCompleted(ctx context.Context, attempt AttemptHandle, payload map[string]any) error {
-	_, err := r.Record(ctx, "model.completed", payload, attempt.StepID, attempt.AttemptID)
-	return err
+func (r *LaneRecorder) CompleteRun(ctx context.Context, payload map[string]any) (StoredEvent, error) {
+	return r.Record(ctx, "run.completed", r.lane.RunID, payload, "")
 }
 
-func (r *SessionRecorder) ModelFailed(ctx context.Context, attempt AttemptHandle, failure error) error {
-	_, err := r.Record(ctx, "model.failed", errorPayload(failure), attempt.StepID, attempt.AttemptID)
-	return err
+func (r *LaneRecorder) FailRun(ctx context.Context, failure error) (StoredEvent, error) {
+	return r.Record(ctx, "run.failed", r.lane.RunID, errorPayload(failure), "")
 }
 
-func (r *SessionRecorder) ToolCompleted(ctx context.Context, attempt AttemptHandle, payload map[string]any) error {
-	_, err := r.Record(ctx, "tool.completed", payload, attempt.StepID, attempt.AttemptID)
-	return err
+func (r *LaneRecorder) StartTurn(ctx context.Context, payload map[string]any) (Turn, error) {
+	turn := NewTurn(r.lane.ID)
+	if err := r.store.CreateTurn(ctx, turn); err != nil {
+		return Turn{}, err
+	}
+	if _, err := r.Record(ctx, "turn.started", turn.ID, payload, ""); err != nil {
+		return Turn{}, err
+	}
+	return turn, nil
 }
 
-func (r *SessionRecorder) ToolFailed(ctx context.Context, attempt AttemptHandle, failure error) error {
-	_, err := r.Record(ctx, "tool.failed", errorPayload(failure), attempt.StepID, attempt.AttemptID)
-	return err
+func (r *LaneRecorder) CompleteTurn(ctx context.Context, turnID string, payload map[string]any) (StoredEvent, error) {
+	return r.Record(ctx, "turn.completed", turnID, payload, "")
 }
 
-func (r *SessionRecorder) beforeCall(ctx context.Context, kind, stepID string, payload map[string]any) (AttemptHandle, error) {
-	attemptID := NewID()
-	event, err := r.Record(ctx, kind+".requested", payload, stepID, attemptID)
+func (r *LaneRecorder) FailTurn(ctx context.Context, turnID string, failure error) (StoredEvent, error) {
+	return r.Record(ctx, "turn.failed", turnID, errorPayload(failure), "")
+}
+
+func (r *LaneRecorder) BeforeModelCall(ctx context.Context, turnID string, payload map[string]any) (AttemptHandle, error) {
+	return r.beforeCall(ctx, "model_call", turnID, payload, Action{}, 1)
+}
+
+func (r *LaneRecorder) BeforeToolCall(ctx context.Context, turnID string, payload map[string]any) (AttemptHandle, error) {
+	return r.beforeCall(ctx, "tool_call", turnID, payload, Action{}, 1)
+}
+
+func (r *LaneRecorder) Retry(ctx context.Context, actionID string, attemptNo int, payload map[string]any) (AttemptHandle, error) {
+	action, exists, err := r.store.GetAction(ctx, actionID)
 	if err != nil {
 		return AttemptHandle{}, err
 	}
-	return AttemptHandle{Kind: kind, StepID: stepID, AttemptID: attemptID, RequestedEventID: event.EventID}, nil
+	if !exists {
+		return AttemptHandle{}, fmt.Errorf("%w: action %s", ErrEntityNotFound, actionID)
+	}
+	if action.Type != "model_call" && action.Type != "tool_call" {
+		return AttemptHandle{}, fmt.Errorf("action %s is not retryable", actionID)
+	}
+	return r.beforeCall(ctx, action.Type, action.TurnID, payload, action, attemptNo)
+}
+
+func (r *LaneRecorder) ModelCompleted(ctx context.Context, attempt AttemptHandle, payload map[string]any) error {
+	if attempt.ActionType != "model_call" {
+		return errors.New("attempt is not a model_call")
+	}
+	_, err := r.attemptCompleted(ctx, attempt, payload)
+	return err
+}
+
+func (r *LaneRecorder) ModelFailed(ctx context.Context, attempt AttemptHandle, failure error) error {
+	if attempt.ActionType != "model_call" {
+		return errors.New("attempt is not a model_call")
+	}
+	_, err := r.attemptFailed(ctx, attempt, failure)
+	return err
+}
+
+func (r *LaneRecorder) ToolCompleted(ctx context.Context, attempt AttemptHandle, payload map[string]any) error {
+	if attempt.ActionType != "tool_call" {
+		return errors.New("attempt is not a tool_call")
+	}
+	_, err := r.attemptCompleted(ctx, attempt, payload)
+	return err
+}
+
+func (r *LaneRecorder) ToolFailed(ctx context.Context, attempt AttemptHandle, failure error) error {
+	if attempt.ActionType != "tool_call" {
+		return errors.New("attempt is not a tool_call")
+	}
+	_, err := r.attemptFailed(ctx, attempt, failure)
+	return err
+}
+
+func (r *LaneRecorder) SaveSnapshot(ctx context.Context, profile, profileVersion string, snapshot map[string]any) (StoredEvent, error) {
+	return r.Record(ctx, "lane.framework.snapshot.saved", r.lane.ID, map[string]any{
+		"profile": profile, "profile_version": profileVersion, "snapshot": snapshot,
+	}, "")
+}
+
+func (r *LaneRecorder) Child(ctx context.Context, runID string, actor Actor, causationID string) (*LaneRecorder, error) {
+	return OpenRecorder(ctx, RecorderOptions{
+		Store: r.store, SessionID: r.lane.SessionID, RunID: runID, Actor: actor,
+		ParentLaneID: r.lane.ID, ParentRunID: r.lane.RunID, RunCausationID: causationID,
+	})
+}
+
+func (r *LaneRecorder) beforeCall(ctx context.Context, actionType, turnID string, payload map[string]any, action Action, attemptNo int) (AttemptHandle, error) {
+	if action.ID == "" {
+		action = NewAction(turnID, actionType, "")
+		if err := r.store.CreateAction(ctx, action); err != nil {
+			return AttemptHandle{}, err
+		}
+	}
+	attempt := NewAttempt(action.ID, attemptNo)
+	if err := r.store.CreateAttempt(ctx, attempt); err != nil {
+		return AttemptHandle{}, err
+	}
+	requested, err := r.Record(ctx, "attempt.requested", attempt.ID, payload, "")
+	if err != nil {
+		return AttemptHandle{}, err
+	}
+	return AttemptHandle{
+		ActionType: actionType, TurnID: turnID, ActionID: action.ID,
+		AttemptID: attempt.ID, AttemptNo: attemptNo, RequestedEventID: requested.ID,
+	}, nil
+}
+
+func (r *LaneRecorder) attemptCompleted(ctx context.Context, attempt AttemptHandle, payload map[string]any) (StoredEvent, error) {
+	return r.Record(ctx, "attempt.completed", attempt.AttemptID, payload, attempt.RequestedEventID)
+}
+
+func (r *LaneRecorder) attemptFailed(ctx context.Context, attempt AttemptHandle, failure error) (StoredEvent, error) {
+	return r.Record(ctx, "attempt.failed", attempt.AttemptID, errorPayload(failure), attempt.RequestedEventID)
+}
+
+func (r *LaneRecorder) appendEvent(ctx context.Context, event ProposedEvent) (StoredEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	receipt, err := r.store.Append(ctx, r.lane.ID, r.expectedLastSeq, NewID(), event)
+	if err != nil {
+		return StoredEvent{}, err
+	}
+	r.expectedLastSeq = receipt.LastSeq
+	r.lane.LastSeq = receipt.LastSeq
+	return StoredEvent{ProposedEvent: event, Seq: receipt.FirstSeq, CommittedAt: receipt.CommittedAt}, nil
 }
 
 func errorPayload(err error) map[string]any {
