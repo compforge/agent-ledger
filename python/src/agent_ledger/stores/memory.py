@@ -213,8 +213,14 @@ class MemoryEventStore:
 
             prior_ids = set(self._events)
             for event in batch:
-                if event.causation_id is not None and event.causation_id not in prior_ids:
-                    raise EntityNotFound("causation event", event.causation_id)
+                if event.causation_id is not None:
+                    if event.causation_id not in prior_ids:
+                        raise EntityNotFound("causation event", event.causation_id)
+                    caused = self._events.get(event.causation_id)
+                    if caused is not None:
+                        caused_lane = self._lanes.get(caused.lane_id)
+                        if caused_lane is None or caused_lane.session_id != lane.session_id:
+                            raise SubjectMismatch(event.id, lane.id)
                 prior_ids.add(event.id)
 
             committed_at = utc_now()

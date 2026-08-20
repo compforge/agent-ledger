@@ -340,14 +340,41 @@ class SqlEventStore:
         except TimeoutError as error:
             raise StoreError("SQL checkpoint save timed out") from error
         except IntegrityError as error:
-            actual = await self.load_latest_checkpoint(checkpoint.checkpoint_key)
-            raise CheckpointConflict(
-                expected_revision, actual.revision if actual is not None else 0
-            ) from error
+            return await self._reconcile_checkpoint_integrity_error(
+                checkpoint, expected_revision, error
+            )
         except AgentLedgerError:
             raise
         except SQLAlchemyError as error:
             raise StoreError("SQL checkpoint save failed") from error
+
+    async def _reconcile_checkpoint_integrity_error(
+        self,
+        checkpoint: ProposedCheckpoint,
+        expected_revision: int,
+        insert_error: IntegrityError,
+    ) -> Checkpoint:
+        # Re-read outside the rolled-back transaction. This avoids driver-specific
+        # constraint parsing and distinguishes checkpoint ID reuse from revision races.
+        try:
+            previous = await self.get_checkpoint(checkpoint.id)
+        except StoreError:
+            raise StoreError("SQL checkpoint save failed") from insert_error
+        if previous is not None:
+            proposed = ProposedCheckpoint.model_validate(
+                previous.model_dump(exclude={"revision", "created_at"})
+            )
+            if proposed != checkpoint:
+                raise CheckpointIdempotencyViolation(checkpoint.id)
+            return previous
+        try:
+            latest = await self.load_latest_checkpoint(checkpoint.checkpoint_key)
+        except StoreError:
+            raise StoreError("SQL checkpoint save failed") from insert_error
+        actual_revision = latest.revision if latest is not None else 0
+        if actual_revision != expected_revision:
+            raise CheckpointConflict(expected_revision, actual_revision) from insert_error
+        raise StoreError("SQL checkpoint save failed") from insert_error
 
     async def get_checkpoint(self, checkpoint_id: str) -> Checkpoint | None:
         row = await self._get(_Checkpoint, checkpoint_id)

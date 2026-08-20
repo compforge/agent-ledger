@@ -130,6 +130,18 @@ async def test_subject_must_resolve_to_target_lane(event_store: EventStore) -> N
         await event_store.append(second.id, 0, new_id(), [wrong])
 
 
+async def test_causation_must_stay_within_session(event_store: EventStore) -> None:
+    first = await lane(event_store, session_id="session-1", run_id="run-1")
+    second = await lane(event_store, session_id="session-2", run_id="run-2")
+    cause = event(first)
+    await event_store.append(first.id, 0, new_id(), [cause])
+    effect = event(second)
+    effect = effect.model_copy(update={"causation_id": cause.id})
+
+    with pytest.raises(SubjectMismatch):
+        await event_store.append(second.id, 0, new_id(), [effect])
+
+
 async def test_attempt_number_is_unique_within_action(event_store: EventStore) -> None:
     target = await lane(event_store)
     turn = Turn(lane_id=target.id)

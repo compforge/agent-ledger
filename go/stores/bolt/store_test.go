@@ -33,9 +33,16 @@ func TestStorePersistsLane(t *testing.T) {
 		"application/vnd.compforge.agentgo.messages+json;version=1",
 		map[string]any{"messages": []any{"hello"}},
 	)
+	checkpoint.Extensions = nil
 	checkpoint.Anchor = &agentledger.CheckpointAnchor{LaneID: lane.ID, LastAppliedSeq: 1, LastAppliedEventID: event.ID}
-	if _, err := store.SaveCheckpoint(ctx, 0, checkpoint); err != nil {
+	saved, err := store.SaveCheckpoint(ctx, 0, checkpoint)
+	if err != nil {
 		t.Fatal(err)
+	}
+	checkpoint.Extensions = map[string]any{}
+	repeated, err := store.SaveCheckpoint(ctx, 0, checkpoint)
+	if err != nil || repeated.ID != saved.ID {
+		t.Fatalf("idempotent checkpoint = %#v, %v", repeated, err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)

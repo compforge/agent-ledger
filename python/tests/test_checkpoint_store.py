@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from agent_ledger import (
     Actor,
@@ -14,6 +15,7 @@ from agent_ledger import (
     new_id,
 )
 from agent_ledger.store import CheckpointStore, EventStore
+from agent_ledger.stores.sql import SqlEventStore
 
 
 async def test_checkpoint_versions_and_idempotency(event_store: EventStore) -> None:
@@ -111,3 +113,40 @@ async def test_checkpoint_can_reference_an_artifact(event_store: EventStore) -> 
 
     assert saved.artifact_ref == checkpoint.artifact_ref
     assert saved.state is None
+
+
+async def test_sql_checkpoint_insert_reconciliation(event_store: EventStore) -> None:
+    if not isinstance(event_store, SqlEventStore):
+        pytest.skip("SQL store only")
+    actor = Actor(type="harness", framework="test")
+    await event_store.create_actor(actor)
+    checkpoint = ProposedCheckpoint(
+        checkpoint_key="native-session",
+        actor_id=actor.id,
+        format="application/json",
+        state={"messages": ["hello"]},
+    )
+    saved = await event_store.save_checkpoint(0, checkpoint)
+    insert_error = IntegrityError("INSERT", {}, Exception("constraint"))
+
+    assert (
+        await event_store._reconcile_checkpoint_integrity_error(checkpoint, 0, insert_error)
+        == saved
+    )
+    with pytest.raises(CheckpointIdempotencyViolation):
+        await event_store._reconcile_checkpoint_integrity_error(
+            checkpoint.model_copy(update={"state": {"messages": ["different"]}}),
+            0,
+            insert_error,
+        )
+    with pytest.raises(CheckpointConflict):
+        await event_store._reconcile_checkpoint_integrity_error(
+            ProposedCheckpoint(
+                checkpoint_key=checkpoint.checkpoint_key,
+                actor_id=actor.id,
+                format=checkpoint.format,
+                state={"messages": ["other"]},
+            ),
+            0,
+            insert_error,
+        )

@@ -219,9 +219,13 @@ func (s *Store) SaveCheckpoint(ctx context.Context, expectedRevision int64, prop
 	if err := validateCheckpoint(proposed); err != nil {
 		return agentledger.Checkpoint{}, err
 	}
+	if proposed.Extensions == nil {
+		proposed.Extensions = map[string]any{}
+	}
 	ctx, cancel := s.withTimeout(ctx)
 	defer cancel()
 	var stored agentledger.Checkpoint
+	var insertErr error
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var previous checkpointRow
 		result := tx.First(&previous, "id = ?", proposed.ID)
@@ -274,11 +278,46 @@ func (s *Store) SaveCheckpoint(ctx context.Context, expectedRevision int64, prop
 			return err
 		}
 		if err := tx.Create(row).Error; err != nil {
-			return fmt.Errorf("%w: expected %d", agentledger.ErrCheckpointConflict, expectedRevision)
+			insertErr = err
+			return err
 		}
 		return nil
 	})
+	if insertErr != nil {
+		return s.reconcileCheckpointInsert(ctx, expectedRevision, proposed, insertErr)
+	}
 	return stored, err
+}
+
+func (s *Store) reconcileCheckpointInsert(ctx context.Context, expectedRevision int64, proposed agentledger.ProposedCheckpoint, insertErr error) (agentledger.Checkpoint, error) {
+	// Re-read after the failed transaction: constraint names and error types vary by driver,
+	// while the persisted rows unambiguously distinguish idempotency from revision conflicts.
+	previous, ok, err := s.GetCheckpoint(ctx, proposed.ID)
+	if err != nil {
+		return agentledger.Checkpoint{}, fmt.Errorf("insert checkpoint: %w", insertErr)
+	}
+	if ok {
+		same, err := sameCheckpoint(previous.ProposedCheckpoint, proposed)
+		if err != nil {
+			return agentledger.Checkpoint{}, err
+		}
+		if !same {
+			return agentledger.Checkpoint{}, agentledger.ErrCheckpointIdempotencyViolation
+		}
+		return previous, nil
+	}
+	latest, ok, err := s.LoadLatestCheckpoint(ctx, proposed.CheckpointKey)
+	if err != nil {
+		return agentledger.Checkpoint{}, fmt.Errorf("insert checkpoint: %w", insertErr)
+	}
+	actualRevision := int64(0)
+	if ok {
+		actualRevision = latest.Revision
+	}
+	if actualRevision != expectedRevision {
+		return agentledger.Checkpoint{}, fmt.Errorf("%w: expected %d, actual %d", agentledger.ErrCheckpointConflict, expectedRevision, actualRevision)
+	}
+	return agentledger.Checkpoint{}, fmt.Errorf("insert checkpoint: %w", insertErr)
 }
 
 func (s *Store) GetCheckpoint(ctx context.Context, id string) (agentledger.Checkpoint, bool, error) {
