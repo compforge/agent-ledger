@@ -33,7 +33,7 @@ func (s *Store) Initialize(ctx context.Context) error {
 	ctx, cancel := s.withTimeout(ctx)
 	defer cancel()
 	return s.db.WithContext(ctx).AutoMigrate(
-		&actorRow{}, &laneRow{}, &turnRow{}, &actionRow{}, &attemptRow{}, &eventRow{}, &appendRow{},
+		&actorRow{}, &laneRow{}, &turnRow{}, &actionRow{}, &attemptRow{}, &eventRow{}, &appendRow{}, &checkpointRow{},
 	)
 }
 
@@ -210,6 +210,105 @@ func (s *Store) GetAttempt(ctx context.Context, id string) (agentledger.Attempt,
 		return agentledger.Attempt{}, false, result.Error
 	}
 	return row.toModel(), true, nil
+}
+
+func (s *Store) SaveCheckpoint(ctx context.Context, expectedRevision int64, proposed agentledger.ProposedCheckpoint) (agentledger.Checkpoint, error) {
+	if expectedRevision < 0 {
+		return agentledger.Checkpoint{}, errors.New("expected_revision must be non-negative")
+	}
+	if err := validateCheckpoint(proposed); err != nil {
+		return agentledger.Checkpoint{}, err
+	}
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+	var stored agentledger.Checkpoint
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var previous checkpointRow
+		result := tx.First(&previous, "id = ?", proposed.ID)
+		if result.Error == nil {
+			value, err := previous.toModel()
+			if err != nil {
+				return err
+			}
+			same, err := sameCheckpoint(value.ProposedCheckpoint, proposed)
+			if err != nil {
+				return err
+			}
+			if !same {
+				return agentledger.ErrCheckpointIdempotencyViolation
+			}
+			stored = value
+			return nil
+		}
+		if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return result.Error
+		}
+		if !rowExists[actorRow](tx, proposed.ActorID) {
+			return fmt.Errorf("%w: actor %s", agentledger.ErrEntityNotFound, proposed.ActorID)
+		}
+		var latest checkpointRow
+		result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("checkpoint_key = ?", proposed.CheckpointKey).
+			Order("revision DESC").First(&latest)
+		actualRevision := int64(0)
+		if result.Error == nil {
+			actualRevision = latest.Revision
+		} else if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return result.Error
+		}
+		if actualRevision != expectedRevision {
+			return fmt.Errorf("%w: expected %d, actual %d", agentledger.ErrCheckpointConflict, expectedRevision, actualRevision)
+		}
+		if proposed.Anchor != nil {
+			var event eventRow
+			if err := tx.First(&event, "id = ?", proposed.Anchor.LastAppliedEventID).Error; err != nil {
+				return errors.New("checkpoint anchor must identify an existing lane event")
+			}
+			if event.LaneID != proposed.Anchor.LaneID || event.Seq != proposed.Anchor.LastAppliedSeq {
+				return errors.New("checkpoint anchor must identify an existing lane event")
+			}
+		}
+		stored = agentledger.Checkpoint{ProposedCheckpoint: proposed, Revision: actualRevision + 1, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		row, err := checkpointToRow(stored)
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(row).Error; err != nil {
+			return fmt.Errorf("%w: expected %d", agentledger.ErrCheckpointConflict, expectedRevision)
+		}
+		return nil
+	})
+	return stored, err
+}
+
+func (s *Store) GetCheckpoint(ctx context.Context, id string) (agentledger.Checkpoint, bool, error) {
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+	var row checkpointRow
+	result := s.db.WithContext(ctx).First(&row, "id = ?", id)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return agentledger.Checkpoint{}, false, nil
+	}
+	if result.Error != nil {
+		return agentledger.Checkpoint{}, false, result.Error
+	}
+	value, err := row.toModel()
+	return value, true, err
+}
+
+func (s *Store) LoadLatestCheckpoint(ctx context.Context, checkpointKey string) (agentledger.Checkpoint, bool, error) {
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+	var row checkpointRow
+	result := s.db.WithContext(ctx).Where("checkpoint_key = ?", checkpointKey).Order("revision DESC").First(&row)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return agentledger.Checkpoint{}, false, nil
+	}
+	if result.Error != nil {
+		return agentledger.Checkpoint{}, false, result.Error
+	}
+	value, err := row.toModel()
+	return value, true, err
 }
 
 func (s *Store) Append(ctx context.Context, laneID string, expectedLastSeq int64, appendID string, events ...agentledger.ProposedEvent) (agentledger.AppendReceipt, error) {
@@ -612,6 +711,24 @@ type appendRow struct {
 
 func (appendRow) TableName() string { return "ledger_appends" }
 
+type checkpointRow struct {
+	ID                 string    `gorm:"column:id;type:char(36);primaryKey"`
+	SchemaVersion      string    `gorm:"column:schema_version;type:varchar(16);not null"`
+	CheckpointKey      string    `gorm:"column:checkpoint_key;type:varchar(191);not null;uniqueIndex:uq_ledger_checkpoints_key_revision;index:ix_ledger_checkpoints_latest"`
+	Revision           int64     `gorm:"column:revision;not null;uniqueIndex:uq_ledger_checkpoints_key_revision;index:ix_ledger_checkpoints_latest"`
+	ActorID            string    `gorm:"column:actor_id;type:char(36);not null;index:ix_ledger_checkpoints_actor"`
+	Format             string    `gorm:"column:format;type:varchar(255);not null"`
+	State              jsonMap   `gorm:"column:state;type:json"`
+	ArtifactRef        jsonMap   `gorm:"column:artifact_ref;type:json"`
+	LaneID             *string   `gorm:"column:lane_id;type:char(36);index:ix_ledger_checkpoints_lane_seq"`
+	LastAppliedSeq     *int64    `gorm:"column:last_applied_seq;index:ix_ledger_checkpoints_lane_seq"`
+	LastAppliedEventID *string   `gorm:"column:last_applied_event_id;type:char(36);index:ix_ledger_checkpoints_event"`
+	Extensions         jsonMap   `gorm:"column:extensions;type:json;not null"`
+	CreatedAt          time.Time `gorm:"column:created_at;not null"`
+}
+
+func (checkpointRow) TableName() string { return "ledger_checkpoints" }
+
 func actorToRow(value agentledger.Actor) *actorRow {
 	return &actorRow{ID: value.ID, Type: value.Type, Framework: nullable(value.Framework), CreatedAt: mustTime(value.CreatedAt)}
 }
@@ -665,6 +782,85 @@ func (row appendRow) toModel() agentledger.AppendReceipt {
 	return agentledger.AppendReceipt{ID: row.ID, LaneID: row.LaneID, Digest: row.Digest, FirstSeq: row.FirstSeq, LastSeq: row.LastSeq, CommittedAt: formatTime(row.CommittedAt)}
 }
 
+func checkpointToRow(value agentledger.Checkpoint) (*checkpointRow, error) {
+	row := &checkpointRow{
+		ID: value.ID, SchemaVersion: value.SchemaVersion, CheckpointKey: value.CheckpointKey,
+		Revision: value.Revision, ActorID: value.ActorID, Format: value.Format,
+		State: jsonMap(value.State), Extensions: jsonMap(value.Extensions), CreatedAt: mustTime(value.CreatedAt),
+	}
+	if value.ArtifactRef != nil {
+		encoded, err := json.Marshal(value.ArtifactRef)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(encoded, &row.ArtifactRef); err != nil {
+			return nil, err
+		}
+	}
+	if value.Anchor != nil {
+		row.LaneID = nullable(value.Anchor.LaneID)
+		row.LastAppliedSeq = &value.Anchor.LastAppliedSeq
+		row.LastAppliedEventID = nullable(value.Anchor.LastAppliedEventID)
+	}
+	return row, nil
+}
+
+func (row checkpointRow) toModel() (agentledger.Checkpoint, error) {
+	proposed := agentledger.ProposedCheckpoint{
+		SchemaVersion: row.SchemaVersion, ID: row.ID, CheckpointKey: row.CheckpointKey,
+		ActorID: row.ActorID, Format: row.Format, State: map[string]any(row.State),
+		Extensions: map[string]any(row.Extensions),
+	}
+	if len(row.ArtifactRef) > 0 {
+		encoded, err := json.Marshal(row.ArtifactRef)
+		if err != nil {
+			return agentledger.Checkpoint{}, err
+		}
+		var ref agentledger.ArtifactRef
+		if err := json.Unmarshal(encoded, &ref); err != nil {
+			return agentledger.Checkpoint{}, err
+		}
+		proposed.ArtifactRef = &ref
+	}
+	if row.LaneID != nil && row.LastAppliedSeq != nil && row.LastAppliedEventID != nil {
+		proposed.Anchor = &agentledger.CheckpointAnchor{
+			LaneID: *row.LaneID, LastAppliedSeq: *row.LastAppliedSeq, LastAppliedEventID: *row.LastAppliedEventID,
+		}
+	}
+	return agentledger.Checkpoint{ProposedCheckpoint: proposed, Revision: row.Revision, CreatedAt: formatTime(row.CreatedAt)}, nil
+}
+
+func validateCheckpoint(value agentledger.ProposedCheckpoint) error {
+	if value.SchemaVersion != "1.0" || value.ID == "" || value.CheckpointKey == "" || value.ActorID == "" || value.Format == "" {
+		return errors.New("checkpoint requires schema version, id, key, actor, and format")
+	}
+	if (value.State == nil) == (value.ArtifactRef == nil) {
+		return errors.New("exactly one of state and artifact_ref must be set")
+	}
+	if value.Anchor != nil && (value.Anchor.LaneID == "" || value.Anchor.LastAppliedSeq < 1 || value.Anchor.LastAppliedEventID == "") {
+		return errors.New("checkpoint anchor requires lane, positive seq, and event")
+	}
+	return nil
+}
+
+func sameCheckpoint(left, right agentledger.ProposedCheckpoint) (bool, error) {
+	if left.Extensions == nil {
+		left.Extensions = map[string]any{}
+	}
+	if right.Extensions == nil {
+		right.Extensions = map[string]any{}
+	}
+	leftJSON, err := json.Marshal(left)
+	if err != nil {
+		return false, err
+	}
+	rightJSON, err := json.Marshal(right)
+	if err != nil {
+		return false, err
+	}
+	return string(leftJSON) == string(rightJSON), nil
+}
+
 func nullable(value string) *string {
 	if value == "" {
 		return nil
@@ -687,3 +883,4 @@ func mustTime(value string) time.Time {
 func formatTime(value time.Time) string { return value.UTC().Format(time.RFC3339Nano) }
 
 var _ agentledger.EventStore = (*Store)(nil)
+var _ agentledger.CheckpointStore = (*Store)(nil)

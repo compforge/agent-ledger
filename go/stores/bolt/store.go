@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"reflect"
 	"sort"
 	"time"
 
@@ -15,16 +16,18 @@ import (
 )
 
 var (
-	actorsBucket         = []byte("actors")
-	lanesBucket          = []byte("lanes")
-	laneNamesBucket      = []byte("lane_names")
-	turnsBucket          = []byte("turns")
-	actionsBucket        = []byte("actions")
-	attemptsBucket       = []byte("attempts")
-	attemptNumbersBucket = []byte("attempt_numbers")
-	eventsBucket         = []byte("events")
-	appendsBucket        = []byte("appends")
-	laneEventsBucket     = []byte("lane_events")
+	actorsBucket          = []byte("actors")
+	lanesBucket           = []byte("lanes")
+	laneNamesBucket       = []byte("lane_names")
+	turnsBucket           = []byte("turns")
+	actionsBucket         = []byte("actions")
+	attemptsBucket        = []byte("attempts")
+	attemptNumbersBucket  = []byte("attempt_numbers")
+	eventsBucket          = []byte("events")
+	appendsBucket         = []byte("appends")
+	laneEventsBucket      = []byte("lane_events")
+	checkpointsBucket     = []byte("checkpoints")
+	checkpointHeadsBucket = []byte("checkpoint_heads")
 )
 
 type Store struct{ db *bolt.DB }
@@ -193,6 +196,103 @@ func (s *Store) CreateAttempt(ctx context.Context, attempt agentledger.Attempt) 
 
 func (s *Store) GetAttempt(ctx context.Context, id string) (agentledger.Attempt, bool, error) {
 	return get[agentledger.Attempt](ctx, s.db, attemptsBucket, id)
+}
+
+func (s *Store) SaveCheckpoint(ctx context.Context, expectedRevision int64, proposed agentledger.ProposedCheckpoint) (agentledger.Checkpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return agentledger.Checkpoint{}, err
+	}
+	if expectedRevision < 0 {
+		return agentledger.Checkpoint{}, errors.New("expected_revision must be non-negative")
+	}
+	if err := validateCheckpoint(proposed); err != nil {
+		return agentledger.Checkpoint{}, err
+	}
+	snapshot, err := clone(proposed)
+	if err != nil {
+		return agentledger.Checkpoint{}, err
+	}
+	var stored agentledger.Checkpoint
+	err = s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		checkpoints, err := tx.CreateBucketIfNotExists(checkpointsBucket)
+		if err != nil {
+			return err
+		}
+		heads, err := tx.CreateBucketIfNotExists(checkpointHeadsBucket)
+		if err != nil {
+			return err
+		}
+		if previous, ok, err := bucketGet[agentledger.Checkpoint](checkpoints, proposed.ID); err != nil {
+			return err
+		} else if ok {
+			if !reflect.DeepEqual(previous.ProposedCheckpoint, snapshot) {
+				return agentledger.ErrCheckpointIdempotencyViolation
+			}
+			stored = previous
+			return nil
+		}
+		if !bucketHas(tx.Bucket(actorsBucket), proposed.ActorID) {
+			return fmt.Errorf("%w: actor %s", agentledger.ErrEntityNotFound, proposed.ActorID)
+		}
+		actualRevision := int64(0)
+		if latestID := heads.Get([]byte(proposed.CheckpointKey)); latestID != nil {
+			latest, ok, err := bucketGet[agentledger.Checkpoint](checkpoints, string(latestID))
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errors.New("checkpoint head points to missing checkpoint")
+			}
+			actualRevision = latest.Revision
+		}
+		if actualRevision != expectedRevision {
+			return fmt.Errorf("%w: expected %d, actual %d", agentledger.ErrCheckpointConflict, expectedRevision, actualRevision)
+		}
+		if proposed.Anchor != nil {
+			event, ok, err := bucketGet[agentledger.StoredEvent](tx.Bucket(eventsBucket), proposed.Anchor.LastAppliedEventID)
+			if err != nil {
+				return err
+			}
+			if !ok || event.LaneID != proposed.Anchor.LaneID || event.Seq != proposed.Anchor.LastAppliedSeq {
+				return errors.New("checkpoint anchor must identify an existing lane event")
+			}
+		}
+		stored = agentledger.Checkpoint{ProposedCheckpoint: snapshot, Revision: actualRevision + 1, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		if err := putJSON(checkpoints, stored.ID, stored); err != nil {
+			return err
+		}
+		return heads.Put([]byte(stored.CheckpointKey), []byte(stored.ID))
+	})
+	return stored, err
+}
+
+func (s *Store) GetCheckpoint(ctx context.Context, id string) (agentledger.Checkpoint, bool, error) {
+	return get[agentledger.Checkpoint](ctx, s.db, checkpointsBucket, id)
+}
+
+func (s *Store) LoadLatestCheckpoint(ctx context.Context, checkpointKey string) (agentledger.Checkpoint, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return agentledger.Checkpoint{}, false, err
+	}
+	var checkpoint agentledger.Checkpoint
+	var found bool
+	err := s.db.View(func(tx *bolt.Tx) error {
+		heads := tx.Bucket(checkpointHeadsBucket)
+		if heads == nil {
+			return nil
+		}
+		id := heads.Get([]byte(checkpointKey))
+		if id == nil {
+			return nil
+		}
+		var err error
+		checkpoint, found, err = bucketGet[agentledger.Checkpoint](tx.Bucket(checkpointsBucket), string(id))
+		return err
+	})
+	return checkpoint, found, err
 }
 
 func (s *Store) Append(ctx context.Context, laneID string, expectedLastSeq int64, appendID string, events ...agentledger.ProposedEvent) (agentledger.AppendReceipt, error) {
@@ -580,3 +680,19 @@ func clone[T any](value T) (T, error) {
 	}
 	return result, nil
 }
+
+func validateCheckpoint(value agentledger.ProposedCheckpoint) error {
+	if value.SchemaVersion != "1.0" || value.ID == "" || value.CheckpointKey == "" || value.ActorID == "" || value.Format == "" {
+		return errors.New("checkpoint requires schema version, id, key, actor, and format")
+	}
+	if (value.State == nil) == (value.ArtifactRef == nil) {
+		return errors.New("exactly one of state and artifact_ref must be set")
+	}
+	if value.Anchor != nil && (value.Anchor.LaneID == "" || value.Anchor.LastAppliedSeq < 1 || value.Anchor.LastAppliedEventID == "") {
+		return errors.New("checkpoint anchor requires lane, positive seq, and event")
+	}
+	return nil
+}
+
+var _ agentledger.EventStore = (*Store)(nil)
+var _ agentledger.CheckpointStore = (*Store)(nil)

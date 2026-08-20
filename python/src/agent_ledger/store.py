@@ -6,7 +6,9 @@ from agent_ledger.models import (
     Actor,
     AppendReceipt,
     Attempt,
+    Checkpoint,
     Lane,
+    ProposedCheckpoint,
     ProposedEvent,
     SessionView,
     StoredEvent,
@@ -14,11 +16,13 @@ from agent_ledger.models import (
 )
 
 
-class EventStore(Protocol):
+class ActorStore(Protocol):
     async def create_actor(self, actor: Actor) -> None: ...
 
     async def get_actor(self, actor_id: str) -> Actor | None: ...
 
+
+class EventStore(ActorStore, Protocol):
     async def create_lane(self, lane: Lane) -> None: ...
 
     async def get_lane(self, lane_id: str) -> Lane | None: ...
@@ -52,3 +56,15 @@ class EventStore(Protocol):
     ) -> AsyncIterator[StoredEvent]: ...
 
     async def load_session(self, session_id: str) -> SessionView: ...
+
+
+class CheckpointStore(ActorStore, Protocol):
+    async def save_checkpoint(
+        self,
+        expected_revision: int,
+        checkpoint: ProposedCheckpoint,
+    ) -> Checkpoint: ...
+
+    async def get_checkpoint(self, checkpoint_id: str) -> Checkpoint | None: ...
+
+    async def load_latest_checkpoint(self, checkpoint_key: str) -> Checkpoint | None: ...

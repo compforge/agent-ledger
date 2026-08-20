@@ -9,6 +9,8 @@ from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from agent_ledger.errors import (
+    CheckpointConflict,
+    CheckpointIdempotencyViolation,
     DuplicateEvent,
     EntityConflict,
     EntityNotFound,
@@ -22,11 +24,14 @@ from agent_ledger.models import (
     Actor,
     AppendReceipt,
     Attempt,
+    Checkpoint,
     Lane,
+    ProposedCheckpoint,
     ProposedEvent,
     SessionView,
     StoredEvent,
     Turn,
+    canonical_checkpoint_digest,
     utc_now,
 )
 from agent_ledger.stores._validation import validate_append
@@ -110,6 +115,35 @@ redis.call('HSET', KEYS[3], ARGV[3], encoded)
 return {'ok', encoded}
 """
 
+_SAVE_CHECKPOINT_LUA = r"""
+local previous = redis.call('HGET', KEYS[1], ARGV[1])
+if previous then
+    if redis.call('HGET', KEYS[3], ARGV[1]) == ARGV[4] then
+        return {'existing', previous}
+    end
+    return {'idempotency', ''}
+end
+
+local actual_revision = 0
+local latest_id = redis.call('HGET', KEYS[2], ARGV[2])
+if latest_id then
+    local latest = cjson.decode(redis.call('HGET', KEYS[1], latest_id))
+    actual_revision = tonumber(latest['revision'])
+end
+if actual_revision ~= tonumber(ARGV[3]) then
+    return {'conflict', tostring(actual_revision)}
+end
+
+local checkpoint = cjson.decode(ARGV[5])
+checkpoint['revision'] = actual_revision + 1
+checkpoint['created_at'] = ARGV[6]
+local encoded = cjson.encode(checkpoint)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+redis.call('HSET', KEYS[2], ARGV[2], ARGV[1])
+redis.call('HSET', KEYS[3], ARGV[1], ARGV[4])
+return {'ok', encoded}
+"""
+
 
 class RedisEventStore:
     """Redis Store with atomic Lane OCC and append idempotency."""
@@ -131,6 +165,7 @@ class RedisEventStore:
         self._create_lane_script = client.register_script(_CREATE_LANE_LUA)
         self._create_child_script = client.register_script(_CREATE_CHILD_LUA)
         self._append_script = client.register_script(_APPEND_LUA)
+        self._save_checkpoint_script = client.register_script(_SAVE_CHECKPOINT_LUA)
 
     async def create_actor(self, actor: Actor) -> None:
         try:
@@ -230,6 +265,76 @@ class RedisEventStore:
 
     async def get_attempt(self, attempt_id: str) -> Attempt | None:
         return cast(Attempt | None, await self._get_model("attempts", attempt_id, Attempt))
+
+    async def save_checkpoint(
+        self,
+        expected_revision: int,
+        checkpoint: ProposedCheckpoint,
+    ) -> Checkpoint:
+        if expected_revision < 0:
+            raise ValueError("expected_revision must be non-negative")
+        if await self.get_actor(checkpoint.actor_id) is None:
+            raise EntityNotFound("actor", checkpoint.actor_id)
+        if checkpoint.anchor is not None:
+            event = await self._get_model(
+                "events", checkpoint.anchor.last_applied_event_id, StoredEvent
+            )
+            if (
+                event is None
+                or event.lane_id != checkpoint.anchor.lane_id
+                or event.seq != checkpoint.anchor.last_applied_seq
+            ):
+                raise ValueError("checkpoint anchor must identify an existing lane event")
+        result = await self._run_script(
+            self._save_checkpoint_script,
+            [
+                self._key("checkpoints"),
+                self._key("checkpoint-heads"),
+                self._key("checkpoint-digests"),
+            ],
+            [
+                checkpoint.id,
+                checkpoint.checkpoint_key,
+                expected_revision,
+                canonical_checkpoint_digest(checkpoint),
+                checkpoint.model_dump_json(exclude_none=True),
+                utc_now().isoformat(),
+            ],
+            "Redis checkpoint save",
+        )
+        if not isinstance(result, list) or len(result) != 2:
+            raise StoreError("Redis checkpoint save returned an invalid response")
+        status, payload = _decode(result[0]), _decode(result[1])
+        if status in {"ok", "existing"}:
+            return Checkpoint.model_validate_json(payload)
+        if status == "conflict":
+            raise CheckpointConflict(expected_revision, int(payload))
+        if status == "idempotency":
+            raise CheckpointIdempotencyViolation(checkpoint.id)
+        raise StoreError(f"Redis checkpoint save returned unknown status {status!r}")
+
+    async def get_checkpoint(self, checkpoint_id: str) -> Checkpoint | None:
+        return cast(
+            Checkpoint | None,
+            await self._get_model("checkpoints", checkpoint_id, Checkpoint),
+        )
+
+    async def load_latest_checkpoint(self, checkpoint_key: str) -> Checkpoint | None:
+        try:
+            checkpoint_id = await asyncio.wait_for(
+                cast(
+                    Awaitable[Any],
+                    self._client.hget(self._key("checkpoint-heads"), checkpoint_key),
+                ),
+                timeout=self._operation_timeout,
+            )
+        except TimeoutError as error:
+            raise StoreError("Redis checkpoint lookup timed out") from error
+        except RedisError as error:
+            raise StoreError("Redis checkpoint lookup failed") from error
+        if checkpoint_id is None:
+            return None
+        return await self.get_checkpoint(_decode(checkpoint_id))
 
     async def append(
         self,

@@ -9,7 +9,8 @@ Draft specification for the `0.x` library line.
 Agent harnesses can be interrupted by process replacement, model failures, rate limits, and
 side-effecting tools. Framework-native checkpoints preserve harness context, but do not provide a
 framework-neutral, append-only account of what happened. Agent Ledger defines that execution
-account while leaving control state and harness state to their respective owners.
+account and an opaque Checkpoint Store while leaving control state and the meaning of harness state
+to their respective owners.
 
 ## Execution model
 
@@ -30,6 +31,7 @@ Actor ────────────────────────�
 | Attempt | One physical try of an Action. Retries keep the Action and increment `attempt_no`. |
 | Actor | One stable producer or initiator identity referenced by Events. |
 | Event | An immutable fact about a Session, Run, Lane, Turn, Action, or Attempt. |
+| Checkpoint | One immutable revision of opaque Harness-native state, optionally anchored to a Lane Event. |
 
 A Run has one main Lane and may have additional Lanes for branches or framework-native records.
 Turns are serial within a Lane; different Lanes may progress independently. `main` is a Lane name,
@@ -44,9 +46,9 @@ identifiers are UUIDv7 values.
 - an agent harness records turns, actions, attempts, outcomes, and links to framework-native state;
 - an orchestrator supplies Session and Run identities while retaining desired state, scheduling,
   leases, and reconciliation;
-- stores persist immutable execution identities and events, enforce Lane ordering, and validate
+- stores persist immutable execution identities, Events, and Checkpoints, enforce OCC, and validate
   ownership links;
-- framework adapters persist and restore native harness state with the framework's own APIs;
+- framework adapters dump and restore native harness state with the framework's own APIs;
 - readers derive timelines, recovery input, trajectories, alerts, and evaluation data.
 
 The Ledger does not own an agent loop, construct a universal harness context, decide whether a
@@ -61,8 +63,9 @@ and `parent_action_id` express optional structural relationships without changin
 Entity tables describe identity and containment, not lifecycle status. Actor rows hold stable
 `type` and optional `framework` attributes so the high-volume Event table only repeats `actor_id`.
 Actor attributes are immutable; a semantic change creates a new Actor. Started, completed, failed,
-cancelled, checkpointed, and reconciled are immutable Events. The only mutable technical field in
-the core model is `Lane.last_seq`, which protects append ordering.
+cancelled, checkpointed, and reconciled are immutable Events. `Lane.last_seq` protects Event append
+ordering. Checkpoint revisions are immutable; a backend may maintain a mutable latest pointer as an
+index over them.
 
 SQL schemas intentionally omit foreign-key constraints. Stores MUST validate logical ownership on
 writes. This keeps migration, archival, partitioning, and cross-database operation independent from
@@ -144,7 +147,7 @@ or ask for human resolution. A side-effecting tool MUST NOT be silently retried.
 
 ## Framework recovery
 
-Agent Ledger and harness-native state are complementary:
+The Checkpoint Store and Event Ledger are complementary:
 
 ```text
 restore native checkpoint
@@ -153,10 +156,11 @@ restore native checkpoint
 + continue the unfinished Turn
 ```
 
-The framework adapter owns checkpoint encoding, restoration, replay into native context, and
-unresolved-Attempt policy. Normalized Events alone are not claimed to rebuild contexts containing
-branches, compaction state, queues, custom messages, or opaque checkpoints. RFC 0002 defines this
-adapter boundary.
+The framework adapter owns checkpoint encoding, `format` compatibility, restoration, replay into
+native context, and unresolved-Attempt policy. The Store treats state as opaque JSON or an
+`ArtifactRef`. Normalized Events alone are not claimed to rebuild contexts containing branches,
+compaction state, queues, custom messages, or opaque checkpoints. RFC 0002 defines this adapter
+boundary; `docs/checkpoint.md` defines the save and anchor contract.
 
 ## Read models
 

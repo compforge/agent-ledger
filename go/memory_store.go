@@ -12,26 +12,30 @@ import (
 )
 
 var (
-	ErrLaneConflict         = errors.New("lane sequence conflict")
-	ErrIdempotencyViolation = errors.New("append id reused with different content")
-	ErrDuplicateEvent       = errors.New("duplicate event id")
-	ErrEntityConflict       = errors.New("entity conflict")
-	ErrEntityNotFound       = errors.New("entity not found")
-	ErrSubjectMismatch      = errors.New("event subject does not belong to lane")
+	ErrLaneConflict                   = errors.New("lane sequence conflict")
+	ErrCheckpointConflict             = errors.New("checkpoint revision conflict")
+	ErrIdempotencyViolation           = errors.New("append id reused with different content")
+	ErrCheckpointIdempotencyViolation = errors.New("checkpoint id reused with different content")
+	ErrDuplicateEvent                 = errors.New("duplicate event id")
+	ErrEntityConflict                 = errors.New("entity conflict")
+	ErrEntityNotFound                 = errors.New("entity not found")
+	ErrSubjectMismatch                = errors.New("event subject does not belong to lane")
 )
 
 type MemoryEventStore struct {
-	mu             sync.Mutex
-	actors         map[string]Actor
-	lanes          map[string]Lane
-	laneNames      map[string]string
-	turns          map[string]Turn
-	actions        map[string]Action
-	attempts       map[string]Attempt
-	attemptNumbers map[string]struct{}
-	events         map[string]StoredEvent
-	laneEvents     map[string][]StoredEvent
-	appends        map[string]AppendReceipt
+	mu                sync.Mutex
+	actors            map[string]Actor
+	lanes             map[string]Lane
+	laneNames         map[string]string
+	turns             map[string]Turn
+	actions           map[string]Action
+	attempts          map[string]Attempt
+	attemptNumbers    map[string]struct{}
+	events            map[string]StoredEvent
+	laneEvents        map[string][]StoredEvent
+	appends           map[string]AppendReceipt
+	checkpoints       map[string]Checkpoint
+	latestCheckpoints map[string]string
 }
 
 func NewMemoryEventStore() *MemoryEventStore {
@@ -40,7 +44,8 @@ func NewMemoryEventStore() *MemoryEventStore {
 		turns: make(map[string]Turn), actions: make(map[string]Action),
 		attempts: make(map[string]Attempt), attemptNumbers: make(map[string]struct{}),
 		events: make(map[string]StoredEvent), laneEvents: make(map[string][]StoredEvent),
-		appends: make(map[string]AppendReceipt),
+		appends:     make(map[string]AppendReceipt),
+		checkpoints: make(map[string]Checkpoint), latestCheckpoints: make(map[string]string),
 	}
 }
 
@@ -213,6 +218,80 @@ func (s *MemoryEventStore) GetAttempt(ctx context.Context, id string) (Attempt, 
 	defer s.mu.Unlock()
 	value, ok := s.attempts[id]
 	return value, ok, nil
+}
+
+func (s *MemoryEventStore) SaveCheckpoint(ctx context.Context, expectedRevision int64, proposed ProposedCheckpoint) (Checkpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return Checkpoint{}, err
+	}
+	if expectedRevision < 0 {
+		return Checkpoint{}, errors.New("expected_revision must be non-negative")
+	}
+	if err := validateCheckpoint(proposed); err != nil {
+		return Checkpoint{}, err
+	}
+	snapshot, err := cloneOne(proposed)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if previous, ok := s.checkpoints[proposed.ID]; ok {
+		encodedPrevious, _ := json.Marshal(previous.ProposedCheckpoint)
+		encodedProposed, _ := json.Marshal(snapshot)
+		if string(encodedPrevious) != string(encodedProposed) {
+			return Checkpoint{}, ErrCheckpointIdempotencyViolation
+		}
+		return cloneOne(previous)
+	}
+	if _, ok := s.actors[proposed.ActorID]; !ok {
+		return Checkpoint{}, fmt.Errorf("%w: actor %s", ErrEntityNotFound, proposed.ActorID)
+	}
+	actualRevision := int64(0)
+	if id := s.latestCheckpoints[proposed.CheckpointKey]; id != "" {
+		actualRevision = s.checkpoints[id].Revision
+	}
+	if actualRevision != expectedRevision {
+		return Checkpoint{}, fmt.Errorf("%w: expected %d, actual %d", ErrCheckpointConflict, expectedRevision, actualRevision)
+	}
+	if proposed.Anchor != nil {
+		event, ok := s.events[proposed.Anchor.LastAppliedEventID]
+		if !ok || event.LaneID != proposed.Anchor.LaneID || event.Seq != proposed.Anchor.LastAppliedSeq {
+			return Checkpoint{}, errors.New("checkpoint anchor must identify an existing lane event")
+		}
+	}
+	stored := Checkpoint{ProposedCheckpoint: snapshot, Revision: actualRevision + 1, CreatedAt: now()}
+	s.checkpoints[stored.ID] = stored
+	s.latestCheckpoints[stored.CheckpointKey] = stored.ID
+	return cloneOne(stored)
+}
+
+func (s *MemoryEventStore) GetCheckpoint(ctx context.Context, id string) (Checkpoint, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return Checkpoint{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, ok := s.checkpoints[id]
+	if !ok {
+		return Checkpoint{}, false, nil
+	}
+	cloned, err := cloneOne(value)
+	return cloned, true, err
+}
+
+func (s *MemoryEventStore) LoadLatestCheckpoint(ctx context.Context, checkpointKey string) (Checkpoint, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return Checkpoint{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := s.latestCheckpoints[checkpointKey]
+	if id == "" {
+		return Checkpoint{}, false, nil
+	}
+	cloned, err := cloneOne(s.checkpoints[id])
+	return cloned, true, err
 }
 
 func (s *MemoryEventStore) Append(ctx context.Context, laneID string, expectedLastSeq int64, appendID string, events ...ProposedEvent) (AppendReceipt, error) {
@@ -459,3 +538,19 @@ func clone[T any](value T) (T, error) {
 }
 
 func cloneOne[T any](value T) (T, error) { return clone(value) }
+
+func validateCheckpoint(value ProposedCheckpoint) error {
+	if value.SchemaVersion != "1.0" || value.ID == "" || value.CheckpointKey == "" || value.ActorID == "" || value.Format == "" {
+		return errors.New("checkpoint requires schema version, id, key, actor, and format")
+	}
+	if (value.State == nil) == (value.ArtifactRef == nil) {
+		return errors.New("exactly one of state and artifact_ref must be set")
+	}
+	if value.Anchor != nil && (value.Anchor.LaneID == "" || value.Anchor.LastAppliedSeq < 1 || value.Anchor.LastAppliedEventID == "") {
+		return errors.New("checkpoint anchor requires lane, positive seq, and event")
+	}
+	return nil
+}
+
+var _ EventStore = (*MemoryEventStore)(nil)
+var _ CheckpointStore = (*MemoryEventStore)(nil)

@@ -15,10 +15,25 @@ class LaneConflict(StoreError):
         )
 
 
+class CheckpointConflict(StoreError):
+    def __init__(self, expected_revision: int, actual_revision: int) -> None:
+        self.expected_revision = expected_revision
+        self.actual_revision = actual_revision
+        super().__init__(
+            f"checkpoint revision conflict: expected {expected_revision}, actual {actual_revision}"
+        )
+
+
 class IdempotencyViolation(StoreError):
     def __init__(self, append_id: str) -> None:
         self.append_id = append_id
         super().__init__(f"append id {append_id!r} was already used for different events")
+
+
+class CheckpointIdempotencyViolation(StoreError):
+    def __init__(self, checkpoint_id: str) -> None:
+        self.checkpoint_id = checkpoint_id
+        super().__init__(f"checkpoint id {checkpoint_id!r} was already used for different content")
 
 
 class DuplicateEvent(StoreError):

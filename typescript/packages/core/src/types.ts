@@ -38,6 +38,39 @@ export interface Attempt {
   created_at: string;
 }
 
+export interface ArtifactRef {
+  uri: string;
+  sha256: string;
+  size: number;
+  content_type: string;
+}
+
+export interface CheckpointAnchor {
+  lane_id: string;
+  last_applied_seq: number;
+  last_applied_event_id: string;
+}
+
+interface ProposedCheckpointBase {
+  schema_version: "1.0";
+  id: string;
+  checkpoint_key: string;
+  actor_id: string;
+  format: string;
+  anchor?: CheckpointAnchor;
+  extensions: { [key: string]: JsonValue };
+}
+
+export type ProposedCheckpoint = ProposedCheckpointBase & (
+  | { state: { [key: string]: JsonValue }; artifact_ref?: never }
+  | { artifact_ref: ArtifactRef; state?: never }
+);
+
+export type Checkpoint = ProposedCheckpoint & {
+  revision: number;
+  created_at: string;
+};
+
 export interface ProposedEvent {
   schema_version: "1.0";
   id: string;
@@ -142,6 +175,18 @@ export function newAction(turnId: string, type: string, parentActionId?: string)
 
 export function newAttempt(actionId: string, attemptNo: number): Attempt {
   return { id: newId(), action_id: actionId, attempt_no: attemptNo, created_at: now() };
+}
+
+export function proposedCheckpoint(
+  checkpoint: Omit<ProposedCheckpoint, "schema_version" | "id" | "extensions"> &
+    Partial<Pick<ProposedCheckpointBase, "id" | "extensions">>,
+): ProposedCheckpoint {
+  return {
+    schema_version: "1.0",
+    id: checkpoint.id ?? newId(),
+    extensions: checkpoint.extensions ?? {},
+    ...checkpoint,
+  } as ProposedCheckpoint;
 }
 
 export function proposedEvent(

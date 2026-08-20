@@ -28,6 +28,15 @@ func TestStorePersistsLane(t *testing.T) {
 	if _, err := store.Append(ctx, lane.ID, 0, agentledger.NewID(), event); err != nil {
 		t.Fatal(err)
 	}
+	checkpoint := agentledger.NewCheckpoint(
+		"native-session", actor.ID,
+		"application/vnd.compforge.agentgo.messages+json;version=1",
+		map[string]any{"messages": []any{"hello"}},
+	)
+	checkpoint.Anchor = &agentledger.CheckpointAnchor{LaneID: lane.ID, LastAppliedSeq: 1, LastAppliedEventID: event.ID}
+	if _, err := store.SaveCheckpoint(ctx, 0, checkpoint); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -40,5 +49,9 @@ func TestStorePersistsLane(t *testing.T) {
 	stored, ok, err := reopened.GetLane(ctx, lane.ID)
 	if err != nil || !ok || stored.LastSeq != 1 {
 		t.Fatalf("lane = %#v, %v", stored, err)
+	}
+	latest, ok, err := reopened.LoadLatestCheckpoint(ctx, checkpoint.CheckpointKey)
+	if err != nil || !ok || latest.ID != checkpoint.ID {
+		t.Fatalf("checkpoint = %#v, %v", latest, err)
 	}
 }

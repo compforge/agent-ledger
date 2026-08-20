@@ -19,8 +19,8 @@ Harness adapters own integration code and evolve with their target Harness.
 An Adapter has two independent responsibilities:
 
 1. **Recording binding** maps Harness boundaries to Lane, Turn, Action, Attempt, and Event writes.
-2. **Recovery binding** persists lossless Harness-native state and invokes the Harness continuation
-   API.
+2. **Recovery binding** dumps lossless Harness-native state into a `CheckpointStore`, restores it,
+   and invokes the Harness continuation API.
 
 Normalized Events serve audit, timelines, trajectories, inspection, and alerting. Native state
 serves lossless recovery. An Adapter must not claim that normalized Events rebuild a context when
@@ -114,7 +114,7 @@ declared recovery limitation until a host wrapper captures them.
 Adapters follow the same semantic sequence even though their APIs differ:
 
 1. freeze or create an idle Harness runtime;
-2. load the latest compatible Harness-native checkpoint or snapshot;
+2. load the latest Checkpoint and reject an unsupported state `format` before restoration;
 3. replay already completed outcomes after that checkpoint into native state without re-executing
    their external actions;
 4. inspect unresolved Attempts and reconcile them with provider/tool state;

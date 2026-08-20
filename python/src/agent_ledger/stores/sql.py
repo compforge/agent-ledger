@@ -21,6 +21,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from agent_ledger.errors import (
     AgentLedgerError,
+    CheckpointConflict,
+    CheckpointIdempotencyViolation,
     DuplicateEvent,
     EntityConflict,
     EntityNotFound,
@@ -34,7 +36,10 @@ from agent_ledger.models import (
     Actor,
     AppendReceipt,
     Attempt,
+    Checkpoint,
+    CheckpointAnchor,
     Lane,
+    ProposedCheckpoint,
     ProposedEvent,
     SessionView,
     StoredEvent,
@@ -149,6 +154,31 @@ class _Append(_Base):
     committed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class _Checkpoint(_Base):
+    __tablename__ = "ledger_checkpoints"
+    __table_args__ = (
+        UniqueConstraint("checkpoint_key", "revision", name="uq_ledger_checkpoints_key_revision"),
+        Index("ix_ledger_checkpoints_actor", "actor_id"),
+        Index("ix_ledger_checkpoints_latest", "checkpoint_key", "revision"),
+        Index("ix_ledger_checkpoints_lane_seq", "lane_id", "last_applied_seq"),
+        Index("ix_ledger_checkpoints_event", "last_applied_event_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    checkpoint_key: Mapped[str] = mapped_column(String(_ID_LENGTH), nullable=False)
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    format: Mapped[str] = mapped_column(String(255), nullable=False)
+    state: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    artifact_ref: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    lane_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    last_applied_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_applied_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    extensions: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class SqlEventStore:
     """SQLAlchemy Store shared by SQLite, MySQL, and PostgreSQL."""
 
@@ -255,6 +285,89 @@ class SqlEventStore:
     async def get_attempt(self, attempt_id: str) -> Attempt | None:
         row = await self._get(_Attempt, attempt_id)
         return _attempt_model(row) if row is not None else None
+
+    async def save_checkpoint(
+        self,
+        expected_revision: int,
+        checkpoint: ProposedCheckpoint,
+    ) -> Checkpoint:
+        if expected_revision < 0:
+            raise ValueError("expected_revision must be non-negative")
+        try:
+            async with asyncio.timeout(self._operation_timeout):
+                async with AsyncSession(self._engine) as session:
+                    async with session.begin():
+                        previous = await session.get(_Checkpoint, checkpoint.id)
+                        if previous is not None:
+                            stored = _checkpoint_model(previous)
+                            proposed = ProposedCheckpoint.model_validate(
+                                stored.model_dump(exclude={"revision", "created_at"})
+                            )
+                            if proposed != checkpoint:
+                                raise CheckpointIdempotencyViolation(checkpoint.id)
+                            return stored
+                        if await session.get(_Actor, checkpoint.actor_id) is None:
+                            raise EntityNotFound("actor", checkpoint.actor_id)
+                        latest = await session.scalar(
+                            select(_Checkpoint)
+                            .where(_Checkpoint.checkpoint_key == checkpoint.checkpoint_key)
+                            .order_by(_Checkpoint.revision.desc())
+                            .limit(1)
+                            .with_for_update()
+                        )
+                        actual_revision = latest.revision if latest is not None else 0
+                        if actual_revision != expected_revision:
+                            raise CheckpointConflict(expected_revision, actual_revision)
+                        if checkpoint.anchor is not None:
+                            event = await session.get(
+                                _Event, checkpoint.anchor.last_applied_event_id
+                            )
+                            if (
+                                event is None
+                                or event.lane_id != checkpoint.anchor.lane_id
+                                or event.seq != checkpoint.anchor.last_applied_seq
+                            ):
+                                raise ValueError(
+                                    "checkpoint anchor must identify an existing lane event"
+                                )
+                        stored = Checkpoint.from_proposed(
+                            checkpoint,
+                            revision=actual_revision + 1,
+                            created_at=utc_now(),
+                        )
+                        session.add(_checkpoint_row(stored))
+                    return stored
+        except TimeoutError as error:
+            raise StoreError("SQL checkpoint save timed out") from error
+        except IntegrityError as error:
+            actual = await self.load_latest_checkpoint(checkpoint.checkpoint_key)
+            raise CheckpointConflict(
+                expected_revision, actual.revision if actual is not None else 0
+            ) from error
+        except AgentLedgerError:
+            raise
+        except SQLAlchemyError as error:
+            raise StoreError("SQL checkpoint save failed") from error
+
+    async def get_checkpoint(self, checkpoint_id: str) -> Checkpoint | None:
+        row = await self._get(_Checkpoint, checkpoint_id)
+        return _checkpoint_model(row) if row is not None else None
+
+    async def load_latest_checkpoint(self, checkpoint_key: str) -> Checkpoint | None:
+        try:
+            async with asyncio.timeout(self._operation_timeout):
+                async with AsyncSession(self._engine) as session:
+                    row = await session.scalar(
+                        select(_Checkpoint)
+                        .where(_Checkpoint.checkpoint_key == checkpoint_key)
+                        .order_by(_Checkpoint.revision.desc())
+                        .limit(1)
+                    )
+                    return _checkpoint_model(row) if row is not None else None
+        except TimeoutError as error:
+            raise StoreError("SQL checkpoint lookup timed out") from error
+        except SQLAlchemyError as error:
+            raise StoreError("SQL checkpoint lookup failed") from error
 
     async def append(
         self,
@@ -564,6 +677,27 @@ def _event_row(value: ProposedEvent, seq: int, committed_at: datetime) -> _Event
     return _Event(**value.model_dump(), seq=seq, committed_at=committed_at)
 
 
+def _checkpoint_row(value: Checkpoint) -> _Checkpoint:
+    anchor = value.anchor
+    return _Checkpoint(
+        id=value.id,
+        schema_version=value.schema_version,
+        checkpoint_key=value.checkpoint_key,
+        revision=value.revision,
+        actor_id=value.actor_id,
+        format=value.format,
+        state=value.state,
+        artifact_ref=value.artifact_ref.model_dump(mode="json")
+        if value.artifact_ref is not None
+        else None,
+        lane_id=anchor.lane_id if anchor is not None else None,
+        last_applied_seq=anchor.last_applied_seq if anchor is not None else None,
+        last_applied_event_id=anchor.last_applied_event_id if anchor is not None else None,
+        extensions=value.extensions,
+        created_at=value.created_at,
+    )
+
+
 def _lane_model(row: _Lane) -> Lane:
     return Lane(
         id=row.id,
@@ -623,6 +757,35 @@ def _event_model(row: _Event) -> StoredEvent:
             "committed_at": _aware(row.committed_at),
             "payload": row.payload,
             "extensions": row.extensions,
+        }
+    )
+
+
+def _checkpoint_model(row: _Checkpoint) -> Checkpoint:
+    anchor = (
+        CheckpointAnchor(
+            lane_id=row.lane_id,
+            last_applied_seq=row.last_applied_seq,
+            last_applied_event_id=row.last_applied_event_id,
+        )
+        if row.lane_id is not None
+        and row.last_applied_seq is not None
+        and row.last_applied_event_id is not None
+        else None
+    )
+    return Checkpoint.model_validate(
+        {
+            "schema_version": row.schema_version,
+            "id": row.id,
+            "checkpoint_key": row.checkpoint_key,
+            "revision": row.revision,
+            "actor_id": row.actor_id,
+            "format": row.format,
+            "state": row.state,
+            "artifact_ref": row.artifact_ref,
+            "anchor": anchor,
+            "extensions": row.extensions,
+            "created_at": _aware(row.created_at),
         }
     )
 

@@ -43,6 +43,37 @@ type Attempt struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type ArtifactRef struct {
+	URI         string `json:"uri"`
+	SHA256      string `json:"sha256"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"content_type"`
+}
+
+type CheckpointAnchor struct {
+	LaneID             string `json:"lane_id"`
+	LastAppliedSeq     int64  `json:"last_applied_seq"`
+	LastAppliedEventID string `json:"last_applied_event_id"`
+}
+
+type ProposedCheckpoint struct {
+	SchemaVersion string            `json:"schema_version"`
+	ID            string            `json:"id"`
+	CheckpointKey string            `json:"checkpoint_key"`
+	ActorID       string            `json:"actor_id"`
+	Format        string            `json:"format"`
+	State         map[string]any    `json:"state,omitempty"`
+	ArtifactRef   *ArtifactRef      `json:"artifact_ref,omitempty"`
+	Anchor        *CheckpointAnchor `json:"anchor,omitempty"`
+	Extensions    map[string]any    `json:"extensions"`
+}
+
+type Checkpoint struct {
+	ProposedCheckpoint
+	Revision  int64  `json:"revision"`
+	CreatedAt string `json:"created_at"`
+}
+
 type ProposedEvent struct {
 	SchemaVersion string         `json:"schema_version"`
 	ID            string         `json:"id"`
@@ -134,6 +165,13 @@ func NewAction(turnID, actionType, parentActionID string) Action {
 
 func NewAttempt(actionID string, attemptNo int) Attempt {
 	return Attempt{ID: NewID(), ActionID: actionID, AttemptNo: attemptNo, CreatedAt: now()}
+}
+
+func NewCheckpoint(checkpointKey, actorID, format string, state map[string]any) ProposedCheckpoint {
+	return ProposedCheckpoint{
+		SchemaVersion: "1.0", ID: NewID(), CheckpointKey: checkpointKey, ActorID: actorID,
+		Format: format, State: state, Extensions: map[string]any{},
+	}
 }
 
 func NewEvent(eventType, laneID, subjectID string, actor Actor) ProposedEvent {

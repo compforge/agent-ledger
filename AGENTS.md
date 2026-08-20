@@ -2,14 +2,16 @@
 
 ## 项目定位与边界
 
-Agent Ledger 是框架无关的 Agent 执行账本规范，以及遵守该规范的多语言 SDK 和 Harness
-Adapter。它记录不可变执行事实，用于安全恢复、审计、轨迹提取和评测。
+Agent Ledger 是框架无关的 Agent 执行账本与 Checkpoint 规范，以及遵守该规范的多语言 SDK 和
+Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线，用于安全恢复、审计、轨迹提取
+和评测。
 
 - 稳定产品是 `spec/` 的协议；各语言 Core 保持同构，框架差异由 Adapter 承担。
 - Ledger 拥有“发生过什么”，不拥有 Agent Loop、编排控制状态、调度、Memory、Eval 或策略激活。
-- Harness 原生状态及其 checkpoint/resume 语义由 Harness 和 Adapter 共同拥有；Core 不构造通用
-  `RunContext`。
-- V1 不要求 Collector 或网络服务。应用直接注入 Memory、Redis、Bolt 或关系型 `EventStore`。
+- Harness 原生状态及其 dump/restore 语义由 Harness 和 Adapter 共同拥有；Checkpoint Core 只保存
+  不透明状态和可选 Ledger 锚点，不构造通用 `RunContext`。
+- V1 不要求 Collector 或网络服务。应用直接注入 Memory、Redis、Bolt 或关系型 `EventStore` /
+  `CheckpointStore`。
 
 ## 代码地图与核心模块
 
@@ -18,6 +20,7 @@ Adapter。它记录不可变执行事实，用于安全恢复、审计、轨迹�
 ├── spec/                         # 协议的唯一规范来源
 │   ├── rfcs/                     # 对象、追加、Adapter 与恢复边界
 │   └── schemas/                  # Event、Adapter descriptor 与参考 SQL
+├── docs/                         # Checkpoint 等聚焦主题的设计说明
 ├── conformance/                  # 跨语言 canonical encoding 与 digest 向量
 ├── python/                       # Python Core；Memory、Redis、SQLAlchemy Stores
 ├── typescript/
@@ -45,7 +48,7 @@ Adapter。它记录不可变执行事实，用于安全恢复、审计、轨迹�
    和 Session 投影顺序都不能替代因果关系。
 6. 严格 Adapter 必须在模型或工具调用前持久化 `attempt.requested`，在 Loop 前进前写入
    `attempt.completed` 或 `attempt.failed`。未决副作用工具不能静默重试。
-7. normalized Events 服务跨框架审计和分析；framework-native Lane/Checkpoint 服务无损恢复。
+7. normalized Events 服务跨框架审计和分析；Checkpoint 保存不透明的 framework-native State。
    Pi entry tree 等私有语义不能提升为 Core 模型。
 8. Store 保证原子批次、canonical-content 幂等、Lane OCC、全局 Event/append ID 唯一以及不可变
    归属校验。SQL 不声明外键，关系由 Store 维护。
@@ -68,7 +71,9 @@ Adapter。它记录不可变执行事实，用于安全恢复、审计、轨迹�
 - `README.md` — 使用者视角的项目定位、模型和最短开发入口
 - `spec/rfcs/0001-agent-ledger.md` — Ledger 核心契约、因果模型与读侧投影
 - `spec/rfcs/0002-polyglot-adapters.md` — 多语言 Adapter、能力声明与恢复边界
+- `docs/checkpoint.md` — Checkpoint 对象、保存契约、Ledger 锚点与组合恢复
 - `spec/schemas/event.schema.json` — Event envelope
+- `spec/schemas/checkpoint.schema.json` — Checkpoint envelope
 - `spec/schemas/mysql.sql` — 无外键的参考关系型 Schema
 - `spec/schemas/adapter.schema.json` — Adapter descriptor
 - `conformance/README.md` — 跨语言一致性要求
