@@ -14,9 +14,10 @@ Store suites verify:
 - Lane `seq` preservation in multi-Lane Session projections.
 - `(session_id, run_id)` reads that exclude sibling Runs while preserving their complete hierarchy.
 
-Core recorder suites also verify that terminal Checkpoint linking and `run.completed` share one
-atomic Lane append. Run inspection must surface every terminal fact, linked Checkpoint, and
-unresolved Attempt without deriving orchestrator control state.
+Core recorder suites verify that the public batch append shares the Store's atomicity and advances
+the Recorder's cached Lane head. Terminal Checkpoint linking and `run.completed` exercise this
+general composition boundary. Run inspection must surface every terminal fact, linked Checkpoint,
+and unresolved Attempt without deriving orchestrator control state.
 
 Strict Adapter suites inject failures before model calls, before tools, after external outcomes, and
 during native-state restoration. Passing these vectors and behaviors is required before an SDK can

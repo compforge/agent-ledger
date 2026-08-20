@@ -6,6 +6,7 @@ from agent_ledger import (
     Actor,
     EventType,
     LaneRecorder,
+    ProposedEvent,
     StoreError,
     Turn,
     inspect_run,
@@ -141,25 +142,46 @@ async def test_checkpoint_link_and_run_completion_are_one_inspectable_append() -
     turn = await recorder.start_turn()
     unresolved = await recorder.before_tool_call(turn, payload={"tool": "charge"})
 
-    completion = await recorder.complete_run_with_checkpoint(
-        "plain-loop",
-        new_id(),
-        metadata={"reason": "idle"},
+    checkpoint_linked = ProposedEvent(
+        lane_id=recorder.lane.id,
+        subject_id=recorder.lane.id,
+        event_type=EventType.LANE_FRAMEWORK_CHECKPOINT_LINKED,
+        actor_id=recorder.actor.id,
+        payload={
+            "checkpoint_id": new_id(),
+            "profile": "plain-loop",
+            "profile_version": "1",
+            "metadata": {"reason": "idle"},
+        },
+    )
+    run_completed = ProposedEvent(
+        lane_id=recorder.lane.id,
+        subject_id=recorder.run_id,
+        event_type=EventType.RUN_COMPLETED,
+        actor_id=recorder.actor.id,
+        causation_id=checkpoint_linked.id,
         payload={"result": "done"},
     )
+    append_id = new_id()
+    receipt = await recorder.append([checkpoint_linked, run_completed], append_id=append_id)
+    newer = await recorder.record("lane.test.newer", recorder.lane.id)
+    repeated = await recorder.append([checkpoint_linked, run_completed], append_id=append_id)
+    after_replay = await recorder.record("lane.test.after_replay", recorder.lane.id)
     inspection = inspect_run(await store.load_run(recorder.session_id, recorder.run_id))
+    stored_link = inspection.linked_checkpoints[0].event
+    stored_completion = inspection.terminal_events[0]
 
-    assert completion.receipt.event_ids == (
-        completion.checkpoint_linked.id,
-        completion.run_completed.id,
-    )
-    assert completion.checkpoint_linked.seq + 1 == completion.run_completed.seq
-    assert completion.checkpoint_linked.committed_at == completion.run_completed.committed_at
-    assert completion.run_completed.causation_id == completion.checkpoint_linked.id
-    assert [event.id for event in inspection.terminal_events] == [completion.run_completed.id]
+    assert receipt.event_ids == (checkpoint_linked.id, run_completed.id)
+    assert repeated == receipt
+    assert newer.seq == receipt.last_seq + 1
+    assert after_replay.seq == newer.seq + 1
+    assert recorder.lane.last_seq == after_replay.seq
+    assert stored_link.seq + 1 == stored_completion.seq
+    assert stored_link.committed_at == stored_completion.committed_at
+    assert stored_completion.causation_id == stored_link.id
+    assert [event.id for event in inspection.terminal_events] == [run_completed.id]
     assert (
-        inspection.linked_checkpoints[0].checkpoint_id
-        == (completion.checkpoint_linked.payload["checkpoint_id"])
+        inspection.linked_checkpoints[0].checkpoint_id == checkpoint_linked.payload["checkpoint_id"]
     )
     assert [attempt.attempt_id for attempt in inspection.unresolved_attempts] == [
         unresolved.attempt_id

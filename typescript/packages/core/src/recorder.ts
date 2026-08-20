@@ -35,12 +35,6 @@ export interface RecorderOptions {
   parent?: CausalParent;
 }
 
-export interface RunCompletionEvents {
-  receipt: AppendReceipt;
-  checkpointLinked: StoredEvent;
-  runCompleted: StoredEvent;
-}
-
 export class LaneRecorder {
   readonly store: EventStore;
   readonly lane: Lane;
@@ -116,6 +110,14 @@ export class LaneRecorder {
     return this.#appendEvents([event], options.appendId).then(({ events }) => events[0]!);
   }
 
+  /** Atomically appends an ordered Event batch and advances the Lane cursor. */
+  append(
+    events: readonly ProposedEvent[],
+    options: { appendId?: string } = {},
+  ): Promise<AppendReceipt> {
+    return this.#appendEvents(events, options.appendId).then(({ receipt }) => receipt);
+  }
+
   startRun(payload: { [key: string]: JsonValue } = {}): Promise<StoredEvent> {
     return this.record(EventType.RUN_STARTED, this.lane.run_id, {
       payload: this.parent === undefined ? payload : { ...payload, parent_run_id: this.parent.runId },
@@ -125,33 +127,6 @@ export class LaneRecorder {
 
   completeRun(payload: { [key: string]: JsonValue } = {}): Promise<StoredEvent> {
     return this.record(EventType.RUN_COMPLETED, this.lane.run_id, { payload });
-  }
-
-  async completeRunWithCheckpoint(
-    profile: string,
-    checkpointId: string,
-    options: {
-      profileVersion?: string;
-      metadata?: { [key: string]: JsonValue };
-      payload?: { [key: string]: JsonValue };
-    } = {},
-  ): Promise<RunCompletionEvents> {
-    const checkpointLinked = this.#checkpointLinkEvent(
-      profile,
-      checkpointId,
-      options.profileVersion ?? "1",
-      options.metadata ?? {},
-    );
-    const runCompleted = proposedEvent({
-      lane_id: this.lane.id,
-      subject_id: this.lane.run_id,
-      event_type: EventType.RUN_COMPLETED,
-      actor_id: this.actor.id,
-      causation_id: checkpointLinked.id,
-      payload: options.payload ?? {},
-    });
-    const { events, receipt } = await this.#appendEvents([checkpointLinked, runCompleted]);
-    return { receipt, checkpointLinked: events[0]!, runCompleted: events[1]! };
   }
 
   failRun(error: unknown): Promise<StoredEvent> {
@@ -292,8 +267,11 @@ export class LaneRecorder {
         appendId ?? newId(),
         events,
       );
-      this.#expectedLastSeq = receipt.last_seq;
-      this.lane.last_seq = receipt.last_seq;
+      // An idempotent replay returns its original receipt, which may predate later appends.
+      if (receipt.last_seq > this.#expectedLastSeq) {
+        this.#expectedLastSeq = receipt.last_seq;
+        this.lane.last_seq = receipt.last_seq;
+      }
       const stored = events.map((event, index) => ({
         ...event,
         seq: receipt.first_seq + index,

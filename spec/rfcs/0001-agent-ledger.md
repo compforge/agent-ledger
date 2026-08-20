@@ -155,6 +155,11 @@ The operation is one atomic batch:
 4. Otherwise assign contiguous `seq` values, append all Events, update `last_seq`, and persist the
    receipt in one transaction, or change nothing.
 
+Core `LaneRecorder` APIs expose this ordered batch operation without requiring callers to manage
+`expected_last_seq`; a Recorder serializes its appends and advances its cached Lane head from the
+accepted receipt. This is the general composition boundary for causally related Events, not a
+transaction over arbitrary Ledger entities or external systems.
+
 The append digest is SHA-256 over RFC 8785 canonical JSON for the ordered proposed-Event array.
 Optional fields that are absent are omitted; explicit `null` remains part of the digest.
 
