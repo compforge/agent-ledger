@@ -55,9 +55,10 @@ framework/pi/<native_session_id>          Pi session tree for this Run
 framework/agentgo/<native_session_id>     AgentGo native messages for this Run
 ```
 
-Process recovery continues the same Run and reopens its existing Lanes. If an upstream system
-starts a new Run, native state is not silently shared across the ownership boundary: the Adapter
-must explicitly import a checkpoint or snapshot into a new Lane and record the link.
+An Adapter reopens existing Lanes when the upstream host supplies the same `run_id`; it does not
+infer the Run boundary from process or recovery lifecycle. Native state is not silently shared
+across different Run IDs: the Adapter must explicitly import a checkpoint or snapshot into a new
+Lane and record the link.
 
 `seq` orders one Lane. `load_session` may merge Lanes for display, but timestamp or merge position
 does not create causality; consumers use containment and `causation_id`.

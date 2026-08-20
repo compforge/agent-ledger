@@ -24,7 +24,7 @@ Actor ────────────────────────�
 | Concept | Meaning |
 | --- | --- |
 | Session | One end-to-end task owned and identified by an upstream orchestrator. |
-| Run | One logical harness execution inside a Session, also identified upstream. Process recovery continues the same Run. |
+| Run | An upstream-defined grouping of one or more Lanes inside a Session. Ledger does not define its domain meaning or lifecycle. |
 | Lane | One serial execution line inside a Run and the boundary for ordering and optimistic concurrency. |
 | Turn | One stable interaction or checkpoint boundary inside a Lane. |
 | Action | One logical harness action inside a Turn. Its concrete `type` is extensible, for example `model_call`, `tool_call`, or `compact`. |
@@ -37,15 +37,15 @@ A Run has one main Lane and may have additional Lanes for branches or framework-
 Turns are serial within a Lane; different Lanes may progress independently. `main` is a Lane name,
 not a reserved identifier.
 
-Session and Run identities come from the upstream system. Agent Ledger does not create authoritative
-Session or Run rows. Ledger-owned Actor, Lane, Turn, Action, Attempt, Event, and append receipt
-identifiers are UUIDv7 values.
+Session and Run identities come from the upstream system. Agent Ledger treats `run_id` as an opaque,
+stable containment key and does not create authoritative Session or Run rows. Ledger-owned Actor,
+Lane, Turn, Action, Attempt, Event, and append receipt identifiers are UUIDv7 values.
 
 ## Layer boundary
 
 - an agent harness records turns, actions, attempts, outcomes, and links to framework-native state;
-- an orchestrator supplies Session and Run identities while retaining desired state, scheduling,
-  leases, and reconciliation;
+- an upstream host supplies Session and Run identities while retaining their business meaning and
+  lifecycle;
 - stores persist immutable execution identities, Events, and Checkpoints, enforce OCC, and validate
   ownership links;
 - framework adapters dump and restore native harness state with the framework's own APIs;
@@ -211,8 +211,8 @@ immutable containment rows. They may be rebuilt without mutating Ledger history.
 Run inspection exposes all terminal Events, linked Checkpoints, and unresolved Attempts. It does
 not collapse conflicting terminal facts, select a Checkpoint, mark upstream input as processed, or
 decide retry, termination, scheduling, and acceptance. In particular, `run.completed` means the
-Harness execution completed; an orchestrator remains responsible for accepting that result into
-its own fenced control state.
+producer declared the upstream-defined Run scope complete; the upstream host remains responsible
+for interpreting and accepting that result into its own fenced control state.
 
 A cross-Lane Session timeline is an observation projection. Consumers use `causation_id` and
 containment relationships for explanation; they do not infer causality from display order. A
