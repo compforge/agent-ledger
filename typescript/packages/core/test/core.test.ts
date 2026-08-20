@@ -144,28 +144,47 @@ test("recorder gives retries a new attempt under the same action", async () => {
 
 test("run completion links a checkpoint atomically and remains inspectable", async () => {
   const store = new MemoryEventStore();
+  const actor = newActor("agent", "plain-loop");
   const recorder = await LaneRecorder.open({
-    store, sessionId: "session", runId: "run", actor: newActor("agent", "plain-loop"),
+    store, sessionId: "session", runId: "run", actor,
   });
   const turn = await recorder.startTurn();
   const unresolved = await recorder.beforeToolCall(turn.id, { tool: "charge" });
 
-  const completion = await recorder.completeRunWithCheckpoint("plain-loop", newId(), {
-    metadata: { reason: "idle" }, payload: { result: "done" },
+  const checkpointLinked = proposedEvent({
+    lane_id: recorder.lane.id,
+    subject_id: recorder.lane.id,
+    event_type: EventType.LANE_FRAMEWORK_CHECKPOINT_LINKED,
+    actor_id: actor.id,
+    payload: {
+      checkpoint_id: newId(), profile: "plain-loop", profile_version: "1", metadata: { reason: "idle" },
+    },
   });
+  const runCompleted = proposedEvent({
+    lane_id: recorder.lane.id,
+    subject_id: recorder.lane.run_id,
+    event_type: EventType.RUN_COMPLETED,
+    actor_id: actor.id,
+    causation_id: checkpointLinked.id,
+    payload: { result: "done" },
+  });
+  const appendId = newId();
+  const receipt = await recorder.append([checkpointLinked, runCompleted], { appendId });
+  const repeated = await recorder.append([checkpointLinked, runCompleted], { appendId });
   const inspection = inspectRun(await store.loadRun("session", "run"));
+  const storedLink = inspection.linked_checkpoints[0]!.event;
+  const storedCompletion = inspection.terminal_events[0]!;
 
-  assert.deepEqual(
-    completion.receipt.event_ids,
-    [completion.checkpointLinked.id, completion.runCompleted.id],
-  );
-  assert.equal(completion.checkpointLinked.seq + 1, completion.runCompleted.seq);
-  assert.equal(completion.checkpointLinked.committed_at, completion.runCompleted.committed_at);
-  assert.equal(completion.runCompleted.causation_id, completion.checkpointLinked.id);
-  assert.deepEqual(inspection.terminal_events.map((event) => event.id), [completion.runCompleted.id]);
+  assert.deepEqual(receipt.event_ids, [checkpointLinked.id, runCompleted.id]);
+  assert.deepEqual(repeated, receipt);
+  assert.equal(recorder.lane.last_seq, receipt.last_seq);
+  assert.equal(storedLink.seq + 1, storedCompletion.seq);
+  assert.equal(storedLink.committed_at, storedCompletion.committed_at);
+  assert.equal(storedCompletion.causation_id, storedLink.id);
+  assert.deepEqual(inspection.terminal_events.map((event) => event.id), [runCompleted.id]);
   assert.equal(
     inspection.linked_checkpoints[0]?.checkpoint_id,
-    completion.checkpointLinked.payload.checkpoint_id,
+    checkpointLinked.payload.checkpoint_id,
   );
   assert.deepEqual(
     inspection.unresolved_attempts.map((attempt) => attempt.attempt_id),

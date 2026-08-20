@@ -80,9 +80,9 @@ Event Ledger 的 append-only 语义。
 ## Run 完成关联
 
 当某个 Checkpoint 同时是 Run 的安全终止边界时，Adapter 先保存 Checkpoint，再在同一个 Lane append
-中依次记录 `lane.framework.checkpoint.linked` 与 `run.completed`。三个语言 Core 都提供这一原子记录
-入口，`run.completed.causation_id` 指向 link Event；link payload 使用 `checkpoint_id`、`profile`、
-`profile_version` 和可选 `metadata`。
+中依次记录 `lane.framework.checkpoint.linked` 与 `run.completed`。三个语言的 `LaneRecorder` 都提供
+通用的原子批量 append；`run.completed.causation_id` 指向 link Event，link payload 使用
+`checkpoint_id`、`profile`、`profile_version` 和可选 `metadata`。
 
 这条原子性只覆盖两个 Ledger Event，不跨越 Checkpoint Store 与 Event Store。Checkpoint 保存后、
 Event append 前崩溃会留下未关联 revision；它不构成已完成 Run，也不应自动成为上游采用的恢复点。

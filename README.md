@@ -82,7 +82,8 @@ load_session(session_id)
 An empty Lane has `last_seq = 0`; its first Event has `seq = 1`. Appends are atomic, idempotent by
 RFC 8785 canonical Event content, and protected by Lane-local optimistic concurrency. Event and
 append IDs are globally unique. `seq` orders one Lane only; cross-Lane display order never implies
-causality.
+causality. `LaneRecorder` exposes the same ordered batch append while serializing concurrent calls
+and advancing its cached Lane head after each accepted receipt.
 
 Committed Events are append-only. Corrections and redactions are later Events; physical retention
 is an explicit deployment policy outside the logical Store contract.
@@ -100,7 +101,7 @@ Checkpoint formats are opaque to Ledger, for example
 the last applied Event in a Lane; recovery then reads Events after that seq. See
 [Checkpoint](docs/checkpoint.md) for the full boundary and save contract.
 
-When a persisted Checkpoint is the safe terminal boundary of a Run, each Core SDK can append
+When a persisted Checkpoint is the safe terminal boundary of a Run, a Recorder batch can append
 `lane.framework.checkpoint.linked` and `run.completed` in one atomic Lane batch. Run inspection
 then exposes terminal Events, linked Checkpoints, and unresolved Attempts without choosing an
 orchestrator status or recovery policy.

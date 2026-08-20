@@ -3,7 +3,6 @@ package agentledger
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 )
 
@@ -171,8 +170,9 @@ func TestLaneRecorderCreatesAttemptsForRetries(t *testing.T) {
 func TestRunCompletionLinksCheckpointAtomicallyAndRemainsInspectable(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryEventStore()
+	actor := NewActor("agent", "plain-loop")
 	recorder, err := OpenRecorder(ctx, RecorderOptions{
-		Store: store, SessionID: "session", RunID: "run", Actor: NewActor("agent", "plain-loop"),
+		Store: store, SessionID: "session", RunID: "run", Actor: actor,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -185,25 +185,33 @@ func TestRunCompletionLinksCheckpointAtomicallyAndRemainsInspectable(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	completion, err := recorder.CompleteRunWithCheckpoint(
-		ctx,
-		CheckpointLink{
-			CheckpointID: NewID(), Profile: "plain-loop", ProfileVersion: "1",
-			Metadata: map[string]any{"reason": "idle"},
-		},
-		map[string]any{"result": "done"},
+	checkpointLinked := NewEvent(
+		EventTypeLaneFrameworkCheckpointLinked, recorder.Lane().ID, recorder.Lane().ID, actor,
 	)
+	checkpointLinked.Payload = map[string]any{
+		"checkpoint_id": NewID(), "profile": "plain-loop", "profile_version": "1",
+		"metadata": map[string]any{"reason": "idle"},
+	}
+	runCompleted := NewEvent(EventTypeRunCompleted, recorder.Lane().ID, recorder.RunID(), actor)
+	runCompleted.Payload = map[string]any{"result": "done"}
+	runCompleted.CausationID = checkpointLinked.ID
+	appendID := NewID()
+	receipt, err := recorder.Append(ctx, appendID, checkpointLinked, runCompleted)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(completion.Receipt.EventIDs, []string{completion.CheckpointLinked.ID, completion.RunCompleted.ID}) {
-		t.Fatalf("completion receipt = %#v", completion.Receipt)
+	repeated, err := recorder.Append(ctx, appendID, checkpointLinked, runCompleted)
+	if err != nil || repeated.ID != receipt.ID || repeated.LastSeq != receipt.LastSeq {
+		t.Fatalf("idempotent recorder append = %#v, %v", repeated, err)
 	}
-	if completion.CheckpointLinked.Seq+1 != completion.RunCompleted.Seq || completion.CheckpointLinked.CommittedAt != completion.RunCompleted.CommittedAt {
-		t.Fatalf("completion events were not one append: %#v", completion)
+	if len(receipt.EventIDs) != 2 || receipt.EventIDs[0] != checkpointLinked.ID || receipt.EventIDs[1] != runCompleted.ID {
+		t.Fatalf("completion receipt = %#v", receipt)
 	}
-	if completion.RunCompleted.CausationID != completion.CheckpointLinked.ID {
-		t.Fatalf("run completion cause = %q", completion.RunCompleted.CausationID)
+	if receipt.FirstSeq+1 != receipt.LastSeq || recorder.Lane().LastSeq != receipt.LastSeq {
+		t.Fatalf("completion batch = %#v lane = %#v", receipt, recorder.Lane())
+	}
+	if runCompleted.CausationID != checkpointLinked.ID {
+		t.Fatalf("run completion cause = %q", runCompleted.CausationID)
 	}
 	other, err := OpenRecorder(ctx, RecorderOptions{
 		Store: store, SessionID: recorder.SessionID(), RunID: "other-run", Actor: recorder.actor,
@@ -222,11 +230,15 @@ func TestRunCompletionLinksCheckpointAtomicallyAndRemainsInspectable(t *testing.
 		t.Fatalf("run view contains sibling Run: %#v", view.Lanes)
 	}
 	inspection := InspectRun(view)
-	if len(inspection.TerminalEvents) != 1 || inspection.TerminalEvents[0].ID != completion.RunCompleted.ID {
+	if len(inspection.TerminalEvents) != 1 || inspection.TerminalEvents[0].ID != runCompleted.ID {
 		t.Fatalf("terminal events = %#v", inspection.TerminalEvents)
 	}
-	if len(inspection.LinkedCheckpoints) != 1 || inspection.LinkedCheckpoints[0].CheckpointID != completion.CheckpointLinked.Payload["checkpoint_id"] {
+	if len(inspection.LinkedCheckpoints) != 1 || inspection.LinkedCheckpoints[0].CheckpointID != checkpointLinked.Payload["checkpoint_id"] {
 		t.Fatalf("checkpoint links = %#v", inspection.LinkedCheckpoints)
+	}
+	if inspection.LinkedCheckpoints[0].Event.Seq+1 != inspection.TerminalEvents[0].Seq ||
+		inspection.LinkedCheckpoints[0].Event.CommittedAt != inspection.TerminalEvents[0].CommittedAt {
+		t.Fatalf("completion events were not one append: %#v", inspection)
 	}
 	if len(inspection.UnresolvedAttempts) != 1 || inspection.UnresolvedAttempts[0].AttemptID != unresolved.AttemptID {
 		t.Fatalf("unresolved attempts = %#v", inspection.UnresolvedAttempts)

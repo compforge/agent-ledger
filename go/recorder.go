@@ -29,12 +29,6 @@ type LaneRecorder struct {
 	mu              sync.Mutex
 }
 
-type RunCompletionEvents struct {
-	Receipt          AppendReceipt
-	CheckpointLinked StoredEvent
-	RunCompleted     StoredEvent
-}
-
 type CheckpointLink struct {
 	CheckpointID   string
 	Profile        string
@@ -112,6 +106,13 @@ func (r *LaneRecorder) Lane() Lane        { return r.lane }
 func (r *LaneRecorder) RunID() string     { return r.lane.RunID }
 func (r *LaneRecorder) SessionID() string { return r.lane.SessionID }
 
+// Append atomically records an ordered Event batch on the Recorder's Lane.
+// The append ID is supplied by the caller so an uncertain write can be retried idempotently.
+func (r *LaneRecorder) Append(ctx context.Context, appendID string, events ...ProposedEvent) (AppendReceipt, error) {
+	_, receipt, err := r.appendEvents(ctx, appendID, events...)
+	return receipt, err
+}
+
 func (r *LaneRecorder) Record(ctx context.Context, eventType, subjectID string, payload map[string]any, causationID string) (StoredEvent, error) {
 	event := NewEvent(eventType, r.lane.ID, subjectID, r.actor)
 	event.Payload = payloadOrEmpty(payload)
@@ -129,22 +130,6 @@ func (r *LaneRecorder) StartRun(ctx context.Context, payload map[string]any) (St
 
 func (r *LaneRecorder) CompleteRun(ctx context.Context, payload map[string]any) (StoredEvent, error) {
 	return r.Record(ctx, EventTypeRunCompleted, r.lane.RunID, payload, "")
-}
-
-func (r *LaneRecorder) CompleteRunWithCheckpoint(
-	ctx context.Context,
-	link CheckpointLink,
-	payload map[string]any,
-) (RunCompletionEvents, error) {
-	linked := r.checkpointLinkEvent(link)
-	completed := NewEvent(EventTypeRunCompleted, r.lane.ID, r.lane.RunID, r.actor)
-	completed.Payload = payloadOrEmpty(payload)
-	completed.CausationID = linked.ID
-	events, receipt, err := r.appendEvents(ctx, NewID(), linked, completed)
-	if err != nil {
-		return RunCompletionEvents{}, err
-	}
-	return RunCompletionEvents{Receipt: receipt, CheckpointLinked: events[0], RunCompleted: events[1]}, nil
 }
 
 func (r *LaneRecorder) FailRun(ctx context.Context, failure error) (StoredEvent, error) {
