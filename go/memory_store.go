@@ -469,6 +469,14 @@ func (s *MemoryEventStore) LoadSession(ctx context.Context, sessionID string) (S
 	return cloneOne(view)
 }
 
+func (s *MemoryEventStore) LoadRun(ctx context.Context, sessionID, runID string) (RunView, error) {
+	view, err := s.LoadSession(ctx, sessionID)
+	if err != nil {
+		return RunView{}, err
+	}
+	return SelectRun(view, runID), nil
+}
+
 func observedBefore(left, right StoredEvent) bool {
 	leftTime, leftErr := time.Parse(time.RFC3339Nano, left.CommittedAt)
 	rightTime, rightErr := time.Parse(time.RFC3339Nano, right.CommittedAt)

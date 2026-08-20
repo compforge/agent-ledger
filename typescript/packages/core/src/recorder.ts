@@ -9,9 +9,11 @@ import {
   proposedEvent,
   type Action,
   type Actor,
+  type AppendReceipt,
   type AttemptHandle,
   type JsonValue,
   type Lane,
+  type ProposedEvent,
   type StoredEvent,
   type Turn,
 } from "./types.js";
@@ -31,6 +33,12 @@ export interface RecorderOptions {
   laneName?: string;
   parentLaneId?: string;
   parent?: CausalParent;
+}
+
+export interface RunCompletionEvents {
+  receipt: AppendReceipt;
+  checkpointLinked: StoredEvent;
+  runCompleted: StoredEvent;
 }
 
 export class LaneRecorder {
@@ -97,25 +105,15 @@ export class LaneRecorder {
       appendId?: string;
     } = {},
   ): Promise<StoredEvent> {
-    return this.#serialize(async () => {
-      const event = proposedEvent({
-        lane_id: this.lane.id,
-        subject_id: subjectId,
-        event_type: eventType,
-        actor_id: this.actor.id,
-        ...(options.causationId === undefined ? {} : { causation_id: options.causationId }),
-        payload: options.payload ?? {},
-      });
-      const receipt = await this.store.append(
-        this.lane.id,
-        this.#expectedLastSeq,
-        options.appendId ?? newId(),
-        [event],
-      );
-      this.#expectedLastSeq = receipt.last_seq;
-      this.lane.last_seq = receipt.last_seq;
-      return { ...event, seq: receipt.first_seq, committed_at: receipt.committed_at };
+    const event = proposedEvent({
+      lane_id: this.lane.id,
+      subject_id: subjectId,
+      event_type: eventType,
+      actor_id: this.actor.id,
+      ...(options.causationId === undefined ? {} : { causation_id: options.causationId }),
+      payload: options.payload ?? {},
     });
+    return this.#appendEvents([event], options.appendId).then(({ events }) => events[0]!);
   }
 
   startRun(payload: { [key: string]: JsonValue } = {}): Promise<StoredEvent> {
@@ -127,6 +125,33 @@ export class LaneRecorder {
 
   completeRun(payload: { [key: string]: JsonValue } = {}): Promise<StoredEvent> {
     return this.record(EventType.RUN_COMPLETED, this.lane.run_id, { payload });
+  }
+
+  async completeRunWithCheckpoint(
+    profile: string,
+    checkpointId: string,
+    options: {
+      profileVersion?: string;
+      metadata?: { [key: string]: JsonValue };
+      payload?: { [key: string]: JsonValue };
+    } = {},
+  ): Promise<RunCompletionEvents> {
+    const checkpointLinked = this.#checkpointLinkEvent(
+      profile,
+      checkpointId,
+      options.profileVersion ?? "1",
+      options.metadata ?? {},
+    );
+    const runCompleted = proposedEvent({
+      lane_id: this.lane.id,
+      subject_id: this.lane.run_id,
+      event_type: EventType.RUN_COMPLETED,
+      actor_id: this.actor.id,
+      causation_id: checkpointLinked.id,
+      payload: options.payload ?? {},
+    });
+    const { events, receipt } = await this.#appendEvents([checkpointLinked, runCompleted]);
+    return { receipt, checkpointLinked: events[0]!, runCompleted: events[1]! };
   }
 
   failRun(error: unknown): Promise<StoredEvent> {
@@ -189,6 +214,17 @@ export class LaneRecorder {
     });
   }
 
+  linkCheckpoint(
+    profile: string,
+    checkpointId: string,
+    profileVersion = "1",
+    metadata: { [key: string]: JsonValue } = {},
+  ): Promise<StoredEvent> {
+    return this.#appendEvents([
+      this.#checkpointLinkEvent(profile, checkpointId, profileVersion, metadata),
+    ]).then(({ events }) => events[0]!);
+  }
+
   async child(options: { runId: string; actor: Actor; causationId: string }): Promise<LaneRecorder> {
     return LaneRecorder.open({
       store: this.store, sessionId: this.lane.session_id, runId: options.runId, actor: options.actor,
@@ -228,6 +264,43 @@ export class LaneRecorder {
 
   #assertActionType(attempt: AttemptHandle, expected: string): void {
     if (attempt.action_type !== expected) throw new Error(`attempt is not a ${expected}`);
+  }
+
+  #checkpointLinkEvent(
+    profile: string,
+    checkpointId: string,
+    profileVersion: string,
+    metadata: { [key: string]: JsonValue },
+  ): ProposedEvent {
+    return proposedEvent({
+      lane_id: this.lane.id,
+      subject_id: this.lane.id,
+      event_type: EventType.LANE_FRAMEWORK_CHECKPOINT_LINKED,
+      actor_id: this.actor.id,
+      payload: { profile, profile_version: profileVersion, checkpoint_id: checkpointId, metadata },
+    });
+  }
+
+  #appendEvents(
+    events: readonly ProposedEvent[],
+    appendId?: string,
+  ): Promise<{ events: StoredEvent[]; receipt: AppendReceipt }> {
+    return this.#serialize(async () => {
+      const receipt = await this.store.append(
+        this.lane.id,
+        this.#expectedLastSeq,
+        appendId ?? newId(),
+        events,
+      );
+      this.#expectedLastSeq = receipt.last_seq;
+      this.lane.last_seq = receipt.last_seq;
+      const stored = events.map((event, index) => ({
+        ...event,
+        seq: receipt.first_seq + index,
+        committed_at: receipt.committed_at,
+      }));
+      return { events: stored, receipt };
+    });
   }
 
   async #serialize<T>(operation: () => Promise<T>): Promise<T> {

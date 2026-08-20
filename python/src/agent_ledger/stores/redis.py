@@ -28,10 +28,12 @@ from agent_ledger.models import (
     Lane,
     ProposedCheckpoint,
     ProposedEvent,
+    RunView,
     SessionView,
     StoredEvent,
     Turn,
     canonical_checkpoint_digest,
+    select_run,
     utc_now,
 )
 from agent_ledger.stores._validation import validate_append
@@ -468,6 +470,9 @@ class RedisEventStore:
             attempts=tuple(attempts),
             events=tuple(events),
         )
+
+    async def load_run(self, session_id: str, run_id: str) -> RunView:
+        return select_run(await self.load_session(session_id), run_id)
 
     async def _create_child(
         self,

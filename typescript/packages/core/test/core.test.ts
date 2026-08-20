@@ -8,6 +8,7 @@ import {
   canonicalAppendDigest,
   CheckpointConflict,
   EventType,
+  inspectRun,
   LaneConflict,
   LaneRecorder,
   MemoryEventStore,
@@ -139,6 +140,60 @@ test("recorder gives retries a new attempt under the same action", async () => {
   assert.equal(second.action_id, first.action_id);
   assert.notEqual(second.attempt_id, first.attempt_id);
   assert.equal(second.attempt_no, 2);
+});
+
+test("run completion links a checkpoint atomically and remains inspectable", async () => {
+  const store = new MemoryEventStore();
+  const recorder = await LaneRecorder.open({
+    store, sessionId: "session", runId: "run", actor: newActor("agent", "plain-loop"),
+  });
+  const turn = await recorder.startTurn();
+  const unresolved = await recorder.beforeToolCall(turn.id, { tool: "charge" });
+
+  const completion = await recorder.completeRunWithCheckpoint("plain-loop", newId(), {
+    metadata: { reason: "idle" }, payload: { result: "done" },
+  });
+  const inspection = inspectRun(await store.loadRun("session", "run"));
+
+  assert.deepEqual(
+    completion.receipt.event_ids,
+    [completion.checkpointLinked.id, completion.runCompleted.id],
+  );
+  assert.equal(completion.checkpointLinked.seq + 1, completion.runCompleted.seq);
+  assert.equal(completion.checkpointLinked.committed_at, completion.runCompleted.committed_at);
+  assert.equal(completion.runCompleted.causation_id, completion.checkpointLinked.id);
+  assert.deepEqual(inspection.terminal_events.map((event) => event.id), [completion.runCompleted.id]);
+  assert.equal(
+    inspection.linked_checkpoints[0]?.checkpoint_id,
+    completion.checkpointLinked.payload.checkpoint_id,
+  );
+  assert.deepEqual(
+    inspection.unresolved_attempts.map((attempt) => attempt.attempt_id),
+    [unresolved.attempt_id],
+  );
+});
+
+test("loadRun selects only the requested Run", async () => {
+  const store = new MemoryEventStore();
+  const actor = newActor("agent");
+  await store.createActor(actor);
+  const target = newLane("session", "target");
+  const other = newLane("session", "other");
+  await store.createLane(target);
+  await store.createLane(other);
+  const targetEvent = proposedEvent({
+    lane_id: target.id, subject_id: target.id, event_type: "lane.started", actor_id: actor.id,
+  });
+  const otherEvent = proposedEvent({
+    lane_id: other.id, subject_id: other.id, event_type: "lane.started", actor_id: actor.id,
+  });
+  await store.append(target.id, 0, newId(), [targetEvent]);
+  await store.append(other.id, 0, newId(), [otherEvent]);
+
+  const view = await store.loadRun("session", "target");
+
+  assert.deepEqual(view.lanes.map((lane) => lane.id), [target.id]);
+  assert.deepEqual(view.events.map((event) => event.id), [targetEvent.id]);
 });
 
 test("committed event content is immutable", async () => {

@@ -22,9 +22,11 @@ from agent_ledger.models import (
     Lane,
     ProposedCheckpoint,
     ProposedEvent,
+    RunView,
     SessionView,
     StoredEvent,
     Turn,
+    select_run,
     utc_now,
 )
 from agent_ledger.stores._validation import validate_append
@@ -287,6 +289,9 @@ class MemoryEventStore:
                 attempts=tuple(attempt.model_copy(deep=True) for attempt in attempts),
                 events=tuple(event.model_copy(deep=True) for event in events),
             )
+
+    async def load_run(self, session_id: str, run_id: str) -> RunView:
+        return select_run(await self.load_session(session_id), run_id)
 
     def _validate_subject(self, lane: Lane, event: ProposedEvent) -> None:
         kind = event.subject_kind

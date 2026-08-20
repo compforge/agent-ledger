@@ -2,8 +2,9 @@ import { canonicalAppendDigest, canonicalize } from "./canonical.js";
 import type { CheckpointStore, EventStore } from "./store.js";
 import type {
   Action, Actor, AppendReceipt, Attempt, Checkpoint, Lane, ProposedCheckpoint, ProposedEvent,
-  SessionView, StoredEvent, Turn,
+  RunView, SessionView, StoredEvent, Turn,
 } from "./types.js";
+import { selectRun } from "./types.js";
 
 export class LaneConflict extends Error {}
 export class CheckpointConflict extends Error {}
@@ -215,6 +216,10 @@ export class MemoryEventStore implements EventStore, CheckpointStore {
     const actorIds = new Set(events.map((event) => event.actor_id));
     const actors = [...this.#actors.values()].filter((actor) => actorIds.has(actor.id));
     return structuredClone({ session_id: sessionId, actors, lanes, turns, actions, attempts, events });
+  }
+
+  async loadRun(sessionId: string, runId: string): Promise<RunView> {
+    return selectRun(await this.loadSession(sessionId), runId);
   }
 
   #create<T>(target: Map<string, T>, kind: string, id: string, value: T): void {

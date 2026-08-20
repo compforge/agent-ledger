@@ -77,6 +77,20 @@ lane_id + last_applied_seq + last_applied_event_id
 Checkpoint revision 一经保存不可修改。Checkpoint 的保留与垃圾回收可以采用独立策略；这不改变
 Event Ledger 的 append-only 语义。
 
+## Run 完成关联
+
+当某个 Checkpoint 同时是 Run 的安全终止边界时，Adapter 先保存 Checkpoint，再在同一个 Lane append
+中依次记录 `lane.framework.checkpoint.linked` 与 `run.completed`。三个语言 Core 都提供这一原子记录
+入口，`run.completed.causation_id` 指向 link Event；link payload 使用 `checkpoint_id`、`profile`、
+`profile_version` 和可选 `metadata`。
+
+这条原子性只覆盖两个 Ledger Event，不跨越 Checkpoint Store 与 Event Store。Checkpoint 保存后、
+Event append 前崩溃会留下未关联 revision；它不构成已完成 Run，也不应自动成为上游采用的恢复点。
+反过来，同批 Event 成功后，读侧不会看到缺少 Checkpoint 引用的 `run.completed`。
+
+Run inspection 会汇总全部终态 Event、Checkpoint link 和未决 Attempt，但不从中选择当前状态或恢复点。
+`run.completed` 是 Harness 执行事实，不等价于上游已经接受结果、处理输入或提交控制状态。
+
 ## 与数据库恢复的类比
 
 可以把组合恢复理解为：

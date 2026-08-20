@@ -29,6 +29,19 @@ type LaneRecorder struct {
 	mu              sync.Mutex
 }
 
+type RunCompletionEvents struct {
+	Receipt          AppendReceipt
+	CheckpointLinked StoredEvent
+	RunCompleted     StoredEvent
+}
+
+type CheckpointLink struct {
+	CheckpointID   string
+	Profile        string
+	ProfileVersion string
+	Metadata       map[string]any
+}
+
 func OpenRecorder(ctx context.Context, options RecorderOptions) (*LaneRecorder, error) {
 	if options.Store == nil {
 		return nil, errors.New("recorder requires an event store")
@@ -118,6 +131,22 @@ func (r *LaneRecorder) CompleteRun(ctx context.Context, payload map[string]any) 
 	return r.Record(ctx, EventTypeRunCompleted, r.lane.RunID, payload, "")
 }
 
+func (r *LaneRecorder) CompleteRunWithCheckpoint(
+	ctx context.Context,
+	link CheckpointLink,
+	payload map[string]any,
+) (RunCompletionEvents, error) {
+	linked := r.checkpointLinkEvent(link)
+	completed := NewEvent(EventTypeRunCompleted, r.lane.ID, r.lane.RunID, r.actor)
+	completed.Payload = payloadOrEmpty(payload)
+	completed.CausationID = linked.ID
+	events, receipt, err := r.appendEvents(ctx, NewID(), linked, completed)
+	if err != nil {
+		return RunCompletionEvents{}, err
+	}
+	return RunCompletionEvents{Receipt: receipt, CheckpointLinked: events[0], RunCompleted: events[1]}, nil
+}
+
 func (r *LaneRecorder) FailRun(ctx context.Context, failure error) (StoredEvent, error) {
 	return r.Record(ctx, EventTypeRunFailed, r.lane.RunID, errorPayload(failure), "")
 }
@@ -201,6 +230,22 @@ func (r *LaneRecorder) SaveSnapshot(ctx context.Context, profile, profileVersion
 	}, "")
 }
 
+func (r *LaneRecorder) LinkCheckpoint(ctx context.Context, link CheckpointLink) (StoredEvent, error) {
+	return r.appendEvent(ctx, r.checkpointLinkEvent(link))
+}
+
+func (r *LaneRecorder) checkpointLinkEvent(link CheckpointLink) ProposedEvent {
+	if link.ProfileVersion == "" {
+		link.ProfileVersion = "1"
+	}
+	event := NewEvent(EventTypeLaneFrameworkCheckpointLinked, r.lane.ID, r.lane.ID, r.actor)
+	event.Payload = map[string]any{
+		"profile": link.Profile, "profile_version": link.ProfileVersion,
+		"checkpoint_id": link.CheckpointID, "metadata": payloadOrEmpty(link.Metadata),
+	}
+	return event
+}
+
 func (r *LaneRecorder) Child(ctx context.Context, runID string, actor Actor, causationID string) (*LaneRecorder, error) {
 	return OpenRecorder(ctx, RecorderOptions{
 		Store: r.store, SessionID: r.lane.SessionID, RunID: runID, Actor: actor,
@@ -238,15 +283,31 @@ func (r *LaneRecorder) attemptFailed(ctx context.Context, attempt AttemptHandle,
 }
 
 func (r *LaneRecorder) appendEvent(ctx context.Context, event ProposedEvent) (StoredEvent, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	receipt, err := r.store.Append(ctx, r.lane.ID, r.expectedLastSeq, NewID(), event)
+	events, _, err := r.appendEvents(ctx, NewID(), event)
 	if err != nil {
 		return StoredEvent{}, err
 	}
+	return events[0], nil
+}
+
+func (r *LaneRecorder) appendEvents(ctx context.Context, appendID string, events ...ProposedEvent) ([]StoredEvent, AppendReceipt, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	receipt, err := r.store.Append(ctx, r.lane.ID, r.expectedLastSeq, appendID, events...)
+	if err != nil {
+		return nil, AppendReceipt{}, err
+	}
 	r.expectedLastSeq = receipt.LastSeq
 	r.lane.LastSeq = receipt.LastSeq
-	return StoredEvent{ProposedEvent: event, Seq: receipt.FirstSeq, CommittedAt: receipt.CommittedAt}, nil
+	stored := make([]StoredEvent, 0, len(events))
+	for index, event := range events {
+		stored = append(stored, StoredEvent{
+			ProposedEvent: event,
+			Seq:           receipt.FirstSeq + int64(index),
+			CommittedAt:   receipt.CommittedAt,
+		})
+	}
+	return stored, receipt, nil
 }
 
 func errorPayload(err error) map[string]any {

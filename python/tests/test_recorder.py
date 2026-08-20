@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from agent_ledger import Actor, EventType, LaneRecorder, StoreError, Turn, inspect_session
+from agent_ledger import (
+    Actor,
+    EventType,
+    LaneRecorder,
+    StoreError,
+    Turn,
+    inspect_run,
+    inspect_session,
+    new_id,
+)
 from agent_ledger.frameworks.plain_loop import PlainLoopContext, PlainLoopProfile
 from agent_ledger.stores.memory import MemoryEventStore
 
@@ -124,6 +133,37 @@ async def test_recorder_open_resumes_lane_head() -> None:
 
     events = [event async for event in store.read_lane(original.lane.id)]
     assert [event.seq for event in events] == [1, 2]
+
+
+async def test_checkpoint_link_and_run_completion_are_one_inspectable_append() -> None:
+    store = MemoryEventStore()
+    recorder = await _recorder(store)
+    turn = await recorder.start_turn()
+    unresolved = await recorder.before_tool_call(turn, payload={"tool": "charge"})
+
+    completion = await recorder.complete_run_with_checkpoint(
+        "plain-loop",
+        new_id(),
+        metadata={"reason": "idle"},
+        payload={"result": "done"},
+    )
+    inspection = inspect_run(await store.load_run(recorder.session_id, recorder.run_id))
+
+    assert completion.receipt.event_ids == (
+        completion.checkpoint_linked.id,
+        completion.run_completed.id,
+    )
+    assert completion.checkpoint_linked.seq + 1 == completion.run_completed.seq
+    assert completion.checkpoint_linked.committed_at == completion.run_completed.committed_at
+    assert completion.run_completed.causation_id == completion.checkpoint_linked.id
+    assert [event.id for event in inspection.terminal_events] == [completion.run_completed.id]
+    assert (
+        inspection.linked_checkpoints[0].checkpoint_id
+        == (completion.checkpoint_linked.payload["checkpoint_id"])
+    )
+    assert [attempt.attempt_id for attempt in inspection.unresolved_attempts] == [
+        unresolved.attempt_id
+    ]
 
 
 async def _recorder(store: MemoryEventStore) -> LaneRecorder:

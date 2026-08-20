@@ -54,6 +54,8 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 8. Store 保证原子批次、canonical-content 幂等、Lane OCC、全局 Event/append ID 唯一以及不可变
    归属校验。SQL 不声明外键，关系由 Store 维护。
 9. Reader 必须保留未知 Event type、payload 与 extensions；同一 major schema 内只做兼容扩展。
+10. `RunView` 是按上游 `(session_id, run_id)` 查询的执行读模型，不创建权威 Run 行；Run inspection
+    只汇总终态事实、Checkpoint link 和未决 Attempt，不选择控制状态或恢复策略。
 
 ## 开发约定
 

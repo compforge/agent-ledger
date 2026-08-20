@@ -118,6 +118,60 @@ type SessionView struct {
 	Events    []StoredEvent `json:"events"`
 }
 
+type RunView struct {
+	SessionID string        `json:"session_id"`
+	RunID     string        `json:"run_id"`
+	Actors    []Actor       `json:"actors"`
+	Lanes     []Lane        `json:"lanes"`
+	Turns     []Turn        `json:"turns"`
+	Actions   []Action      `json:"actions"`
+	Attempts  []Attempt     `json:"attempts"`
+	Events    []StoredEvent `json:"events"`
+}
+
+func SelectRun(view SessionView, runID string) RunView {
+	result := RunView{SessionID: view.SessionID, RunID: runID}
+	laneIDs := make(map[string]struct{})
+	for _, lane := range view.Lanes {
+		if lane.RunID == runID {
+			result.Lanes = append(result.Lanes, lane)
+			laneIDs[lane.ID] = struct{}{}
+		}
+	}
+	turnIDs := make(map[string]struct{})
+	for _, turn := range view.Turns {
+		if _, ok := laneIDs[turn.LaneID]; ok {
+			result.Turns = append(result.Turns, turn)
+			turnIDs[turn.ID] = struct{}{}
+		}
+	}
+	actionIDs := make(map[string]struct{})
+	for _, action := range view.Actions {
+		if _, ok := turnIDs[action.TurnID]; ok {
+			result.Actions = append(result.Actions, action)
+			actionIDs[action.ID] = struct{}{}
+		}
+	}
+	for _, attempt := range view.Attempts {
+		if _, ok := actionIDs[attempt.ActionID]; ok {
+			result.Attempts = append(result.Attempts, attempt)
+		}
+	}
+	actorIDs := make(map[string]struct{})
+	for _, event := range view.Events {
+		if _, ok := laneIDs[event.LaneID]; ok {
+			result.Events = append(result.Events, event)
+			actorIDs[event.ActorID] = struct{}{}
+		}
+	}
+	for _, actor := range view.Actors {
+		if _, ok := actorIDs[actor.ID]; ok {
+			result.Actors = append(result.Actors, actor)
+		}
+	}
+	return result
+}
+
 type AdapterCapabilities struct {
 	ModelPrewrite        string `json:"model_prewrite"`
 	ToolPrewrite         string `json:"tool_prewrite"`
