@@ -84,3 +84,25 @@ CREATE TABLE ledger_appends (
     PRIMARY KEY (id),
     KEY ix_ledger_appends_lane_range (lane_id, first_seq, last_seq)
 );
+
+CREATE TABLE ledger_checkpoints (
+    id CHAR(36) NOT NULL COMMENT 'Checkpoint save idempotency key',
+    schema_version VARCHAR(16) NOT NULL,
+    checkpoint_key VARCHAR(191) NOT NULL,
+    revision BIGINT NOT NULL,
+    actor_id CHAR(36) NOT NULL COMMENT 'Logical reference to ledger_actors.id',
+    format VARCHAR(255) NOT NULL COMMENT 'Opaque format interpreted by the Harness Adapter',
+    state JSON NULL,
+    artifact_ref JSON NULL,
+    lane_id CHAR(36) NULL COMMENT 'Optional logical reference to ledger_lanes.id',
+    last_applied_seq BIGINT NULL,
+    last_applied_event_id CHAR(36) NULL COMMENT 'Optional logical reference to ledger_events.id',
+    extensions JSON NOT NULL,
+    created_at TIMESTAMP(6) NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_ledger_checkpoints_key_revision (checkpoint_key, revision),
+    KEY ix_ledger_checkpoints_actor (actor_id),
+    KEY ix_ledger_checkpoints_latest (checkpoint_key, revision),
+    KEY ix_ledger_checkpoints_lane_seq (lane_id, last_applied_seq),
+    KEY ix_ledger_checkpoints_event (last_applied_event_id)
+);

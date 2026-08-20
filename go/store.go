@@ -5,9 +5,13 @@ import (
 	"iter"
 )
 
-type EventStore interface {
+type ActorStore interface {
 	CreateActor(context.Context, Actor) error
 	GetActor(context.Context, string) (Actor, bool, error)
+}
+
+type EventStore interface {
+	ActorStore
 	CreateLane(context.Context, Lane) error
 	GetLane(context.Context, string) (Lane, bool, error)
 	FindLane(context.Context, string, string, string) (Lane, bool, error)
@@ -20,4 +24,11 @@ type EventStore interface {
 	Append(context.Context, string, int64, string, ...ProposedEvent) (AppendReceipt, error)
 	LoadLane(context.Context, string, int64) iter.Seq2[StoredEvent, error]
 	LoadSession(context.Context, string) (SessionView, error)
+}
+
+type CheckpointStore interface {
+	ActorStore
+	SaveCheckpoint(context.Context, int64, ProposedCheckpoint) (Checkpoint, error)
+	GetCheckpoint(context.Context, string) (Checkpoint, bool, error)
+	LoadLatestCheckpoint(context.Context, string) (Checkpoint, bool, error)
 }

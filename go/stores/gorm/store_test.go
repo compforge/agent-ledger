@@ -56,6 +56,20 @@ func TestSQLiteStorePersistsExecutionModel(t *testing.T) {
 	if receipt.LastSeq != 1 {
 		t.Fatalf("last seq = %d", receipt.LastSeq)
 	}
+	checkpoint := agentledger.NewCheckpoint(
+		"native-session", actor.ID,
+		"application/vnd.compforge.agentgo.messages+json;version=1",
+		map[string]any{"messages": []any{"hello"}, "turn": 1},
+	)
+	checkpoint.Anchor = &agentledger.CheckpointAnchor{LaneID: lane.ID, LastAppliedSeq: 1, LastAppliedEventID: event.ID}
+	saved, err := store.SaveCheckpoint(ctx, 0, checkpoint)
+	if err != nil || saved.Revision != 1 {
+		t.Fatalf("checkpoint = %#v, %v", saved, err)
+	}
+	repeated, err := store.SaveCheckpoint(ctx, 0, checkpoint)
+	if err != nil || repeated.ID != saved.ID {
+		t.Fatalf("idempotent checkpoint = %#v, %v", repeated, err)
+	}
 	view, err := store.LoadSession(ctx, lane.SessionID)
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +90,7 @@ func TestAutoMigrateCreatesNoForeignKeys(t *testing.T) {
 	if err := store.Initialize(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	tables := []string{"ledger_lanes", "ledger_turns", "ledger_actions", "ledger_attempts", "ledger_events", "ledger_appends"}
+	tables := []string{"ledger_lanes", "ledger_turns", "ledger_actions", "ledger_attempts", "ledger_events", "ledger_appends", "ledger_checkpoints"}
 	for _, table := range tables {
 		var count int
 		if err := db.Raw("SELECT COUNT(*) FROM pragma_foreign_key_list(?)", table).Scan(&count).Error; err != nil {

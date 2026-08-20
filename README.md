@@ -1,8 +1,8 @@
 # Agent Ledger
 
-Agent Ledger is a framework-neutral execution ledger for agent harnesses and orchestrators. It
-records immutable model calls, tool calls, harness operations, retries, delegation, native-state
-links, and outcomes so a host can audit execution, derive trajectories, and recover safely.
+Agent Ledger is a framework-neutral execution ledger and checkpoint store for agent harnesses and
+orchestrators. It records immutable execution facts and versioned harness-native recovery baselines
+so a host can audit execution, derive trajectories, and recover safely.
 
 The specification is the stable product. Language SDKs implement the same object and append
 contracts; framework adapters bind those contracts to concrete harness hooks and recovery APIs.
@@ -16,12 +16,13 @@ Orchestrator ── Session / Run identity, delegation ──┐
                                                     ├── Agent Ledger
 Harness ── Lane / Turn / Action / Attempt facts ────┘       │
                                                             ├── audit
-Harness-native state ── checkpoint / resume API ────────────┼── recovery
+Harness-native state ── Checkpoint Store ───────────────────┼── recovery
                                                             └── trajectory / eval
 ```
 
-The orchestrator owns control state. Each harness owns its native state. Agent Ledger owns the
-append-only execution facts that connect them.
+The orchestrator owns control state. Each harness owns the meaning of its native state. Agent
+Ledger stores that state opaquely as Checkpoints and owns the append-only execution facts that
+connect it to later work.
 
 ## Model
 
@@ -30,6 +31,8 @@ Session → Run → Lane → Turn → Action → Attempt
                          ↘ immutable Events
 
 Actor ────────────────────────────────↗
+
+CheckpointKey → Checkpoint revision* ── optional Lane/Event anchor
 ```
 
 - `Session` is one upstream task; `Run` is one upstream harness execution.
@@ -79,6 +82,19 @@ causality.
 Committed Events are append-only. Corrections and redactions are later Events; physical retention
 is an explicit deployment policy outside the logical Store contract.
 
+Applications that need recovery inject a `CheckpointStore`:
+
+```text
+save_checkpoint(expected_revision, proposed_checkpoint)
+get_checkpoint(checkpoint_id)
+load_latest_checkpoint(checkpoint_key)
+```
+
+Checkpoint formats are opaque to Ledger, for example
+`application/vnd.compforge.agentgo.message+json;version=1`. A Checkpoint may stand alone or anchor
+the last applied Event in a Lane; recovery then reads Events after that seq. See
+[Checkpoint](docs/checkpoint.md) for the full boundary and save contract.
+
 Go applications inject an already configured GORM handle:
 
 ```go
@@ -112,4 +128,4 @@ make build
 ```
 
 See [RFC 0001](spec/rfcs/0001-agent-ledger.md) for the core contract and
-[RFC 0002](spec/rfcs/0002-polyglot-adapters.md) for adapter and recovery boundaries.
+[RFC 0002](spec/rfcs/0002-polyglot-adapters.md) for adapter boundaries.

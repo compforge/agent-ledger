@@ -5,6 +5,7 @@ import { test } from "node:test";
 
 import {
   canonicalAppendDigest,
+  CheckpointConflict,
   LaneConflict,
   LaneRecorder,
   MemoryEventStore,
@@ -15,6 +16,7 @@ import {
   newLane,
   newTurn,
   proposedEvent,
+  proposedCheckpoint,
 } from "../src/index.js";
 
 test("execution hierarchy projects a session", async () => {
@@ -70,6 +72,47 @@ test("append is idempotent and rejects a stale lane sequence", async () => {
       lane_id: lane.id, subject_id: lane.id, event_type: "lane.completed", actor_id: actor.id,
     })]),
     LaneConflict,
+  );
+});
+
+test("checkpoint save is versioned, idempotent, and optionally anchored", async () => {
+  const store = new MemoryEventStore();
+  const actor = newActor("agent", "pi");
+  const lane = newLane("session", "run");
+  await store.createActor(actor);
+  await store.createLane(lane);
+  const event = proposedEvent({
+    lane_id: lane.id, subject_id: lane.id, event_type: "lane.state.changed", actor_id: actor.id,
+  });
+  await store.append(lane.id, 0, newId(), [event]);
+  const proposed = proposedCheckpoint({
+    checkpoint_key: "native-session",
+    actor_id: actor.id,
+    format: "application/vnd.compforge.pi.session+json;version=1",
+    state: { messages: ["hello"] },
+    anchor: { lane_id: lane.id, last_applied_seq: 1, last_applied_event_id: event.id },
+  });
+
+  const first = await store.saveCheckpoint(0, proposed);
+
+  assert.equal(first.revision, 1);
+  assert.deepEqual(await store.saveCheckpoint(0, proposed), first);
+  const second = proposedCheckpoint({
+    checkpoint_key: proposed.checkpoint_key,
+    actor_id: actor.id,
+    format: proposed.format,
+    state: { messages: ["hello", "world"] },
+  });
+  assert.equal((await store.saveCheckpoint(1, second)).revision, 2);
+  assert.equal((await store.loadLatestCheckpoint(proposed.checkpoint_key))?.id, second.id);
+  await assert.rejects(
+    store.saveCheckpoint(0, proposedCheckpoint({
+      checkpoint_key: proposed.checkpoint_key,
+      actor_id: actor.id,
+      format: proposed.format,
+      state: {},
+    })),
+    CheckpointConflict,
   );
 });
 

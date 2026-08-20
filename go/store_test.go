@@ -90,6 +90,52 @@ func TestMemoryStoreAppendIsIdempotentAndOptimistic(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreCheckpointVersionsAndAnchor(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryEventStore()
+	actor := NewActor("agent", "plain-loop")
+	lane := NewLane("session", "run", "main", "")
+	if err := store.CreateActor(ctx, actor); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateLane(ctx, lane); err != nil {
+		t.Fatal(err)
+	}
+	event := NewEvent("lane.state.changed", lane.ID, lane.ID, actor)
+	if _, err := store.Append(ctx, lane.ID, 0, NewID(), event); err != nil {
+		t.Fatal(err)
+	}
+	proposed := NewCheckpoint(
+		"native-session", actor.ID,
+		"application/vnd.compforge.agentgo.messages+json;version=1",
+		map[string]any{"messages": []any{"hello"}},
+	)
+	proposed.Anchor = &CheckpointAnchor{LaneID: lane.ID, LastAppliedSeq: 1, LastAppliedEventID: event.ID}
+	first, err := store.SaveCheckpoint(ctx, 0, proposed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Revision != 1 {
+		t.Fatalf("revision = %d", first.Revision)
+	}
+	repeated, err := store.SaveCheckpoint(ctx, 0, proposed)
+	if err != nil || repeated.ID != first.ID {
+		t.Fatalf("idempotent save = %#v, %v", repeated, err)
+	}
+	second := NewCheckpoint(proposed.CheckpointKey, actor.ID, proposed.Format, map[string]any{"messages": []any{"hello", "world"}})
+	latest, err := store.SaveCheckpoint(ctx, 1, second)
+	if err != nil || latest.Revision != 2 {
+		t.Fatalf("second save = %#v, %v", latest, err)
+	}
+	loaded, ok, err := store.LoadLatestCheckpoint(ctx, proposed.CheckpointKey)
+	if err != nil || !ok || loaded.ID != second.ID {
+		t.Fatalf("latest checkpoint = %#v, %v", loaded, err)
+	}
+	if _, err := store.SaveCheckpoint(ctx, 0, NewCheckpoint(proposed.CheckpointKey, actor.ID, proposed.Format, map[string]any{})); !errors.Is(err, ErrCheckpointConflict) {
+		t.Fatalf("save error = %v, want checkpoint conflict", err)
+	}
+}
+
 func TestLaneRecorderCreatesAttemptsForRetries(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryEventStore()

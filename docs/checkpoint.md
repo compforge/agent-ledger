@@ -1,0 +1,89 @@
+# Checkpoint
+
+Checkpoint 是 Harness 原生状态的版本化恢复基线。它与 Event Ledger 位于同一个项目中，但不要求
+一起使用：上游可以只保存和加载 Checkpoint，也可以将 Checkpoint 锚定到 Lane，以 Ledger 补齐
+Checkpoint 之后已经发生的动作。
+
+## 边界
+
+- Harness 与 Adapter 决定状态由什么组成，以及如何 dump、restore 和应用已完成动作的结果。
+- Checkpoint Store 只保存不透明状态、格式标识、版本和可选的 Ledger 锚点，不理解状态内容。
+- Event Ledger 记录不可变执行事实，用于审计、轨迹投影和 Checkpoint 之后的恢复。
+- Agent Loop、调度和 `running / waiting / frozen` 等控制状态不属于 Agent Ledger。
+
+因此，`Action.type = checkpoint` 只表示 Harness 执行过一次 checkpoint 动作；`Checkpoint` 才是该
+动作产出的持久化恢复材料，二者不是同一个对象。
+
+## 对象
+
+```text
+CheckpointKey
+  ├─ Checkpoint revision 1
+  ├─ Checkpoint revision 2
+  └─ Checkpoint revision 3 (latest)
+```
+
+每个 Checkpoint 包含：
+
+| 字段 | 含义 |
+| --- | --- |
+| `schema_version` | Checkpoint envelope 的协议版本，约束 Ledger 字段 |
+| `id` | 本次保存请求的 UUIDv7，也作为幂等键 |
+| `checkpoint_key` | Harness 原生可恢复实例的稳定标识，用于组织多个 revision |
+| `revision` | Store 分配的单调版本；首个版本为 1 |
+| `actor_id` | 产生该状态的 Actor |
+| `format` | Adapter 解释的不透明格式，例如 `application/vnd.compforge.agentgo.message+json;version=1` |
+| `state` / `artifact_ref` | 二选一；小状态内联为 JSON，大状态引用 Artifact Store |
+| `anchor` | 可选的 Ledger 恢复位置 |
+| `extensions` | 不影响 Core 语义的扩展信息 |
+
+`format` 由对应 Adapter 判断兼容性。Ledger 不解析 media type、厂商名或 `version` 参数，也不根据
+它转换状态。`schema_version` 与 `format` 是两条独立演进轴：前者描述 Checkpoint envelope，后者
+描述 Harness state；Anchor 等 Ledger 字段变化不应迫使 Harness state 升版，反之亦然。
+
+## Ledger anchor
+
+Anchor 是一个完整三元组：
+
+```text
+lane_id + last_applied_seq + last_applied_event_id
+```
+
+它表示该 Checkpoint 已经包含指定 Lane 上 `last_applied_seq` 及之前的状态影响，并且该位置对应
+`last_applied_event_id`。Store 在保存时验证 Event 确实属于该 Lane 且 seq 相等。没有使用 Ledger
+时不设置 Anchor。
+
+恢复时读取 `seq > last_applied_seq` 的 Events：
+
+1. 加载指定 `checkpoint_key` 的最新 Checkpoint。
+2. Adapter 校验 `format` 并恢复 Harness 原生 State。
+3. 若存在 Anchor，按 Lane seq 重放已经完成动作的结果，而不是重新执行动作。
+4. 对只有 requested、没有终态的 Attempt 做对账、重试或人工处理。
+5. Harness 继续未完成的 Turn，并在新的安全边界保存下一 revision。
+
+只有当 Adapter 能将 completed outcome 幂等地应用到 Harness State 时，Ledger 才具有 redo 能力；
+否则它仍然只是审计与 trajectory 数据。外部 Tool 的副作用也不能仅凭 Event 安全重试。
+
+## 保存契约
+
+`save_checkpoint(expected_revision, proposed_checkpoint)` 使用 CheckpointKey 级 OCC：
+
+- 第一次保存传 `expected_revision = 0`，Store 返回 revision 1。
+- 后续保存必须携带当前 revision，成功后返回 revision + 1。
+- 同一个 `id` 与相同内容重复提交时返回原结果，不产生新 revision。
+- 同一个 `id` 携带不同内容时是幂等冲突。
+- `state` 和 `artifact_ref` 必须且只能设置一个。
+
+Checkpoint revision 一经保存不可修改。Checkpoint 的保留与垃圾回收可以采用独立策略；这不改变
+Event Ledger 的 append-only 语义。
+
+## 与数据库恢复的类比
+
+可以把组合恢复理解为：
+
+```text
+Harness Checkpoint + WAL-like Agent Ledger
+      数据基线       +      后续执行事实
+```
+
+这个类比只描述恢复结构。Agent 的 Tool 可能修改外部系统，因此并不具备数据库事务的封闭性。

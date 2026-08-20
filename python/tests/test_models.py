@@ -3,7 +3,18 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from agent_ledger import Action, Actor, Attempt, Lane, ProposedEvent, Turn, new_id
+from agent_ledger import (
+    Action,
+    Actor,
+    Attempt,
+    Checkpoint,
+    Lane,
+    ProposedCheckpoint,
+    ProposedEvent,
+    Turn,
+    new_id,
+)
+from agent_ledger.models import utc_now
 
 
 def test_ledger_owned_ids_are_uuid7() -> None:
@@ -53,3 +64,33 @@ def test_timestamps_require_timezone() -> None:
 def test_actor_is_extensible() -> None:
     actor = Actor(type="custom-runtime")
     assert actor.type == "custom-runtime"
+
+
+def test_checkpoint_requires_exactly_one_state_source() -> None:
+    actor = Actor(type="harness")
+    with pytest.raises(ValidationError):
+        ProposedCheckpoint(checkpoint_key="key", actor_id=actor.id, format="application/json")
+    with pytest.raises(ValidationError):
+        ProposedCheckpoint(
+            checkpoint_key="key",
+            actor_id=actor.id,
+            format="application/json",
+            state={},
+            artifact_ref={
+                "uri": "memory://state",
+                "sha256": "0" * 64,
+                "size": 2,
+                "content_type": "application/json",
+            },
+        )
+
+
+def test_checkpoint_id_is_uuid7() -> None:
+    proposed = ProposedCheckpoint(
+        checkpoint_key="key",
+        actor_id=Actor(type="harness").id,
+        format="application/json",
+        state={},
+    )
+    stored = Checkpoint.from_proposed(proposed, revision=1, created_at=utc_now())
+    assert stored.id.split("-")[2].startswith("7")

@@ -4,6 +4,8 @@ import asyncio
 from collections.abc import AsyncIterator, Sequence
 
 from agent_ledger.errors import (
+    CheckpointConflict,
+    CheckpointIdempotencyViolation,
     DuplicateEvent,
     EntityConflict,
     EntityNotFound,
@@ -16,7 +18,9 @@ from agent_ledger.models import (
     Actor,
     AppendReceipt,
     Attempt,
+    Checkpoint,
     Lane,
+    ProposedCheckpoint,
     ProposedEvent,
     SessionView,
     StoredEvent,
@@ -41,6 +45,8 @@ class MemoryEventStore:
         self._events: dict[str, StoredEvent] = {}
         self._lane_events: dict[str, list[StoredEvent]] = {}
         self._appends: dict[str, AppendReceipt] = {}
+        self._checkpoints: dict[str, Checkpoint] = {}
+        self._latest_checkpoints: dict[str, Checkpoint] = {}
 
     async def create_actor(self, actor: Actor) -> None:
         async with self._lock:
@@ -130,6 +136,52 @@ class MemoryEventStore:
         async with self._lock:
             attempt = self._attempts.get(attempt_id)
             return attempt.model_copy(deep=True) if attempt is not None else None
+
+    async def save_checkpoint(
+        self,
+        expected_revision: int,
+        checkpoint: ProposedCheckpoint,
+    ) -> Checkpoint:
+        if expected_revision < 0:
+            raise ValueError("expected_revision must be non-negative")
+        async with self._lock:
+            previous = self._checkpoints.get(checkpoint.id)
+            if previous is not None:
+                if _proposed_checkpoint(previous) != checkpoint:
+                    raise CheckpointIdempotencyViolation(checkpoint.id)
+                return previous.model_copy(deep=True)
+            if checkpoint.actor_id not in self._actors:
+                raise EntityNotFound("actor", checkpoint.actor_id)
+            latest = self._latest_checkpoints.get(checkpoint.checkpoint_key)
+            actual_revision = latest.revision if latest is not None else 0
+            if actual_revision != expected_revision:
+                raise CheckpointConflict(expected_revision, actual_revision)
+            if checkpoint.anchor is not None:
+                event = self._events.get(checkpoint.anchor.last_applied_event_id)
+                if (
+                    event is None
+                    or event.lane_id != checkpoint.anchor.lane_id
+                    or event.seq != checkpoint.anchor.last_applied_seq
+                ):
+                    raise ValueError("checkpoint anchor must identify an existing lane event")
+            stored = Checkpoint.from_proposed(
+                checkpoint,
+                revision=actual_revision + 1,
+                created_at=utc_now(),
+            )
+            self._checkpoints[stored.id] = stored
+            self._latest_checkpoints[stored.checkpoint_key] = stored
+            return stored.model_copy(deep=True)
+
+    async def get_checkpoint(self, checkpoint_id: str) -> Checkpoint | None:
+        async with self._lock:
+            value = self._checkpoints.get(checkpoint_id)
+            return value.model_copy(deep=True) if value is not None else None
+
+    async def load_latest_checkpoint(self, checkpoint_key: str) -> Checkpoint | None:
+        async with self._lock:
+            value = self._latest_checkpoints.get(checkpoint_key)
+            return value.model_copy(deep=True) if value is not None else None
 
     async def append(
         self,
@@ -253,3 +305,7 @@ class MemoryEventStore:
             valid = turn is not None and turn.lane_id == lane.id
         if not valid:
             raise SubjectMismatch(event.id, lane.id)
+
+
+def _proposed_checkpoint(value: Checkpoint) -> ProposedCheckpoint:
+    return ProposedCheckpoint.model_validate(value.model_dump(exclude={"revision", "created_at"}))

@@ -9,7 +9,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 import rfc8785
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SCHEMA_VERSION: Literal["1.0"] = "1.0"
 UUID7_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -72,6 +72,56 @@ class ArtifactRef(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size: int = Field(ge=0)
     content_type: str = Field(min_length=1)
+
+
+class CheckpointAnchor(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    lane_id: str = Field(pattern=UUID7_PATTERN)
+    last_applied_seq: int = Field(ge=1)
+    last_applied_event_id: str = Field(pattern=UUID7_PATTERN)
+
+
+class ProposedCheckpoint(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    id: str = Field(default_factory=new_id, pattern=UUID7_PATTERN)
+    checkpoint_key: str = Field(min_length=1)
+    actor_id: str = Field(pattern=UUID7_PATTERN)
+    format: str = Field(min_length=1)
+    state: dict[str, Any] | None = None
+    artifact_ref: ArtifactRef | None = None
+    anchor: CheckpointAnchor | None = None
+    extensions: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_one_state_source(self) -> ProposedCheckpoint:
+        if (self.state is None) == (self.artifact_ref is None):
+            raise ValueError("exactly one of state and artifact_ref must be set")
+        return self
+
+
+class Checkpoint(ProposedCheckpoint):
+    revision: int = Field(ge=1)
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def require_created_timezone(cls, value: datetime) -> datetime:
+        return _require_timezone("created_at", value)
+
+    @classmethod
+    def from_proposed(
+        cls,
+        value: ProposedCheckpoint,
+        *,
+        revision: int,
+        created_at: datetime,
+    ) -> Checkpoint:
+        return cls.model_validate(
+            {**value.model_dump(), "revision": revision, "created_at": created_at}
+        )
 
 
 class Lane(BaseModel):
@@ -210,6 +260,11 @@ class SessionView(BaseModel):
 
 def canonical_append_digest(events: list[ProposedEvent] | tuple[ProposedEvent, ...]) -> str:
     body = [event.model_dump(mode="json", exclude_none=True) for event in events]
+    return hashlib.sha256(rfc8785.dumps(body)).hexdigest()
+
+
+def canonical_checkpoint_digest(checkpoint: ProposedCheckpoint) -> str:
+    body = checkpoint.model_dump(mode="json", exclude_none=True)
     return hashlib.sha256(rfc8785.dumps(body)).hexdigest()
 
 

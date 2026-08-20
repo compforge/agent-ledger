@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/checkpoint.schema.json",
+  "title": "Agent Ledger Checkpoint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "checkpoint_key",
+    "revision",
+    "actor_id",
+    "format",
+    "extensions",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "id": { "type": "string", "format": "uuid" },
+    "checkpoint_key": { "type": "string", "minLength": 1 },
+    "revision": { "type": "integer", "minimum": 1 },
+    "actor_id": { "type": "string", "format": "uuid" },
+    "format": { "type": "string", "minLength": 1 },
+    "state": {},
+    "artifact_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "sha256", "size", "content_type"],
+      "properties": {
+        "uri": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size": { "type": "integer", "minimum": 0 },
+        "content_type": { "type": "string", "minLength": 1 }
+      }
+    },
+    "anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lane_id", "last_applied_seq", "last_applied_event_id"],
+      "properties": {
+        "lane_id": { "type": "string", "format": "uuid" },
+        "last_applied_seq": { "type": "integer", "minimum": 1 },
+        "last_applied_event_id": { "type": "string", "format": "uuid" }
+      }
+    },
+    "extensions": { "type": "object" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "oneOf": [
+    { "required": ["state"], "not": { "required": ["artifact_ref"] } },
+    { "required": ["artifact_ref"], "not": { "required": ["state"] } }
+  ]
+}

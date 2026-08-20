@@ -7,6 +7,8 @@ from agent_ledger.adapters import (
 from agent_ledger.artifacts import ArtifactStore, MemoryArtifactStore
 from agent_ledger.errors import (
     AgentLedgerError,
+    CheckpointConflict,
+    CheckpointIdempotencyViolation,
     DuplicateEvent,
     EntityConflict,
     EntityNotFound,
@@ -29,14 +31,18 @@ from agent_ledger.models import (
     AppendReceipt,
     ArtifactRef,
     Attempt,
+    Checkpoint,
+    CheckpointAnchor,
     EventType,
     Lane,
+    ProposedCheckpoint,
     ProposedEvent,
     SessionView,
     StoredEvent,
     Turn,
+    canonical_checkpoint_digest,
     new_id,
 )
 from agent_ledger.recorder import AttemptHandle, LaneRecorder
-from agent_ledger.store import EventStore
+from agent_ledger.store import ActorStore, CheckpointStore, EventStore
 from agent_ledger.trajectory import project_atif

@@ -1,17 +1,20 @@
-import { canonicalAppendDigest } from "./canonical.js";
-import type { EventStore } from "./store.js";
+import { canonicalAppendDigest, canonicalize } from "./canonical.js";
+import type { CheckpointStore, EventStore } from "./store.js";
 import type {
-  Action, Actor, AppendReceipt, Attempt, Lane, ProposedEvent, SessionView, StoredEvent, Turn,
+  Action, Actor, AppendReceipt, Attempt, Checkpoint, Lane, ProposedCheckpoint, ProposedEvent,
+  SessionView, StoredEvent, Turn,
 } from "./types.js";
 
 export class LaneConflict extends Error {}
+export class CheckpointConflict extends Error {}
 export class IdempotencyViolation extends Error {}
+export class CheckpointIdempotencyViolation extends Error {}
 export class DuplicateEvent extends Error {}
 export class EntityConflict extends Error {}
 export class EntityNotFound extends Error {}
 export class SubjectMismatch extends Error {}
 
-export class MemoryEventStore implements EventStore {
+export class MemoryEventStore implements EventStore, CheckpointStore {
   readonly #actors = new Map<string, Actor>();
   readonly #lanes = new Map<string, Lane>();
   readonly #laneNames = new Map<string, string>();
@@ -22,6 +25,8 @@ export class MemoryEventStore implements EventStore {
   readonly #events = new Map<string, StoredEvent>();
   readonly #laneEvents = new Map<string, StoredEvent[]>();
   readonly #appends = new Map<string, AppendReceipt>();
+  readonly #checkpoints = new Map<string, Checkpoint>();
+  readonly #latestCheckpoints = new Map<string, string>();
 
   async createActor(actor: Actor): Promise<void> {
     this.#create(this.#actors, "actor", actor.id, actor);
@@ -88,6 +93,50 @@ export class MemoryEventStore implements EventStore {
 
   async getAttempt(id: string): Promise<Attempt | undefined> {
     return cloneOptional(this.#attempts.get(id));
+  }
+
+  async saveCheckpoint(expectedRevision: number, proposed: ProposedCheckpoint): Promise<Checkpoint> {
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+      throw new TypeError("expectedRevision must be a non-negative safe integer");
+    }
+    validateCheckpoint(proposed);
+    const checkpoint = structuredClone(proposed);
+    const previous = this.#checkpoints.get(checkpoint.id);
+    if (previous) {
+      if (!sameCheckpoint(previous, checkpoint)) throw new CheckpointIdempotencyViolation(checkpoint.id);
+      return structuredClone(previous);
+    }
+    if (!this.#actors.has(checkpoint.actor_id)) throw new EntityNotFound(`actor ${checkpoint.actor_id}`);
+    const latestId = this.#latestCheckpoints.get(checkpoint.checkpoint_key);
+    const actualRevision = latestId === undefined ? 0 : this.#checkpoints.get(latestId)!.revision;
+    if (actualRevision !== expectedRevision) {
+      throw new CheckpointConflict(`expected ${expectedRevision}, actual ${actualRevision}`);
+    }
+    if (checkpoint.anchor !== undefined) {
+      const event = this.#events.get(checkpoint.anchor.last_applied_event_id);
+      if (event === undefined
+        || event.lane_id !== checkpoint.anchor.lane_id
+        || event.seq !== checkpoint.anchor.last_applied_seq) {
+        throw new TypeError("checkpoint anchor must identify an existing lane event");
+      }
+    }
+    const stored: Checkpoint = {
+      ...checkpoint,
+      revision: actualRevision + 1,
+      created_at: new Date().toISOString(),
+    };
+    this.#checkpoints.set(stored.id, stored);
+    this.#latestCheckpoints.set(stored.checkpoint_key, stored.id);
+    return structuredClone(stored);
+  }
+
+  async getCheckpoint(id: string): Promise<Checkpoint | undefined> {
+    return cloneOptional(this.#checkpoints.get(id));
+  }
+
+  async loadLatestCheckpoint(checkpointKey: string): Promise<Checkpoint | undefined> {
+    const id = this.#latestCheckpoints.get(checkpointKey);
+    return id === undefined ? undefined : structuredClone(this.#checkpoints.get(id)!);
   }
 
   async append(
@@ -198,4 +247,24 @@ function laneNameKey(sessionId: string, runId: string, name: string): string {
 
 function cloneOptional<T>(value: T | undefined): T | undefined {
   return value === undefined ? undefined : structuredClone(value);
+}
+
+function validateCheckpoint(value: ProposedCheckpoint): void {
+  if (value.schema_version !== "1.0" || value.id === "" || value.checkpoint_key === ""
+    || value.actor_id === "" || value.format === "") {
+    throw new TypeError("checkpoint requires schema version, id, key, actor, and format");
+  }
+  if (("state" in value) === ("artifact_ref" in value)) {
+    throw new TypeError("exactly one of state and artifact_ref must be set");
+  }
+  if (value.anchor !== undefined && (!Number.isSafeInteger(value.anchor.last_applied_seq)
+    || value.anchor.last_applied_seq < 1 || value.anchor.lane_id === ""
+    || value.anchor.last_applied_event_id === "")) {
+    throw new TypeError("checkpoint anchor requires lane, positive seq, and event");
+  }
+}
+
+function sameCheckpoint(stored: Checkpoint, proposed: ProposedCheckpoint): boolean {
+  const { revision: _revision, created_at: _createdAt, ...existing } = stored;
+  return canonicalize(existing) === canonicalize(proposed);
 }
