@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/compforge/agent-ledger/go"
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestStorePersistsLane(t *testing.T) {
@@ -60,5 +61,43 @@ func TestStorePersistsLane(t *testing.T) {
 	latest, ok, err := reopened.LoadLatestCheckpoint(ctx, checkpoint.CheckpointKey)
 	if err != nil || !ok || latest.ID != checkpoint.ID {
 		t.Fatalf("checkpoint = %#v, %v", latest, err)
+	}
+}
+
+func TestCheckpointRetryAcceptsLegacyNilExtensions(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "ledger.db"), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	actor := agentledger.NewActor("agent", "agentgo")
+	if err := store.CreateActor(ctx, actor); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := agentledger.NewCheckpoint("native-session", actor.ID, "application/json", map[string]any{"value": 1})
+	checkpoint.Extensions = nil
+	legacy := agentledger.Checkpoint{ProposedCheckpoint: checkpoint, Revision: 1, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	if err := store.db.Update(func(tx *bolt.Tx) error {
+		checkpoints, err := tx.CreateBucketIfNotExists(checkpointsBucket)
+		if err != nil {
+			return err
+		}
+		if err := putJSON(checkpoints, legacy.ID, legacy); err != nil {
+			return err
+		}
+		heads, err := tx.CreateBucketIfNotExists(checkpointHeadsBucket)
+		if err != nil {
+			return err
+		}
+		return heads.Put([]byte(legacy.CheckpointKey), []byte(legacy.ID))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	checkpoint.Extensions = map[string]any{}
+	repeated, err := store.SaveCheckpoint(ctx, 0, checkpoint)
+	if err != nil || repeated.ID != legacy.ID {
+		t.Fatalf("idempotent checkpoint = %#v, %v", repeated, err)
 	}
 }

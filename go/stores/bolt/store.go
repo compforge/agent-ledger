@@ -231,7 +231,11 @@ func (s *Store) SaveCheckpoint(ctx context.Context, expectedRevision int64, prop
 		if previous, ok, err := bucketGet[agentledger.Checkpoint](checkpoints, proposed.ID); err != nil {
 			return err
 		} else if ok {
-			if !reflect.DeepEqual(previous.ProposedCheckpoint, snapshot) {
+			previousCheckpoint := previous.ProposedCheckpoint
+			if previousCheckpoint.Extensions == nil {
+				previousCheckpoint.Extensions = map[string]any{}
+			}
+			if !reflect.DeepEqual(previousCheckpoint, snapshot) {
 				return agentledger.ErrCheckpointIdempotencyViolation
 			}
 			stored = previous
