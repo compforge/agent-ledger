@@ -26,15 +26,31 @@ type MessageCodec interface {
 	Decode(kind string, data json.RawMessage) (agentgo.AgentMessage, error)
 }
 
+type ToolEffectResolver func(agentgo.ToolCall) agentledger.Effect
+
+type ToolRetryDecision struct {
+	Approved bool
+	Metadata map[string]any
+}
+
+// ToolRetryPolicy authorizes one physical retry of one unresolved Attempt.
+// The caller may attach decision metadata so a restored process can prove that
+// the same authorization was already consumed by a later Attempt.
+type ToolRetryPolicy func(agentledger.Action, agentledger.Attempt, agentgo.ToolCall) ToolRetryDecision
+
 type Config struct {
-	Store            agentledger.EventStore
-	SessionID        string
-	RunID            string
-	Actor            agentledger.Actor
-	NativeSessionID  string
-	MessageCodec     MessageCodec
-	BeforeTurn       agentgo.BeforeTurnHook
-	AfterTurn        agentgo.AfterTurnHook
+	Store           agentledger.EventStore
+	SessionID       string
+	RunID           string
+	Actor           agentledger.Actor
+	NativeSessionID string
+	MessageCodec    MessageCodec
+	BeforeTurn      agentgo.BeforeTurnHook
+	AfterTurn       agentgo.AfterTurnHook
+	// ToolEffect fixes the logical Action's Effect before its first Attempt.
+	ToolEffect ToolEffectResolver
+	// CanRetryTool is intentionally fail-closed by default; recovery policy belongs to the caller.
+	CanRetryTool     ToolRetryPolicy
 	OperationTimeout time.Duration
 }
 
@@ -45,6 +61,8 @@ type Adapter struct {
 	timeout         time.Duration
 	beforeTurn      agentgo.BeforeTurnHook
 	afterTurn       agentgo.AfterTurnHook
+	toolEffect      ToolEffectResolver
+	canRetryTool    ToolRetryPolicy
 
 	mu          sync.Mutex
 	currentTurn string
@@ -65,6 +83,16 @@ func New(ctx context.Context, config Config) (*Adapter, error) {
 	if nativeSessionID == "" {
 		nativeSessionID = config.SessionID
 	}
+	toolEffect := config.ToolEffect
+	if toolEffect == nil {
+		toolEffect = func(agentgo.ToolCall) agentledger.Effect { return agentledger.UnknownEffect() }
+	}
+	canRetryTool := config.CanRetryTool
+	if canRetryTool == nil {
+		canRetryTool = func(agentledger.Action, agentledger.Attempt, agentgo.ToolCall) ToolRetryDecision {
+			return ToolRetryDecision{}
+		}
+	}
 	runtimeRecorder, err := agentledger.OpenRecorder(ctx, agentledger.RecorderOptions{
 		Store: config.Store, SessionID: config.SessionID, RunID: config.RunID,
 		LaneName: "main", Actor: config.Actor,
@@ -82,6 +110,7 @@ func New(ctx context.Context, config Config) (*Adapter, error) {
 	return &Adapter{
 		runtimeRecorder: runtimeRecorder, stateRecorder: stateRecorder, codec: codec,
 		timeout: config.OperationTimeout, beforeTurn: config.BeforeTurn, afterTurn: config.AfterTurn,
+		toolEffect: toolEffect, canRetryTool: canRetryTool,
 	}, nil
 }
 
@@ -107,9 +136,10 @@ func (a *Adapter) ToolMiddleware() agentgo.ToolMiddleware {
 		if err != nil {
 			return nil, err
 		}
-		attempt, err := a.runtimeRecorder.BeforeToolCall(ctx, turnID, map[string]any{
+		payload := map[string]any{
 			"tool_call_id": call.ID, "tool_name": call.Name, "arguments": string(call.Args),
-		})
+		}
+		attempt, err := a.beforeToolCall(ctx, turnID, call, payload)
 		if err != nil {
 			return nil, fmt.Errorf("record agentgo tool request: %w", err)
 		}
@@ -125,6 +155,111 @@ func (a *Adapter) ToolMiddleware() agentgo.ToolMiddleware {
 		}
 		return result, nil
 	}
+}
+
+func (a *Adapter) beforeToolCall(
+	ctx context.Context,
+	turnID string,
+	call agentgo.ToolCall,
+	payload map[string]any,
+) (agentledger.AttemptHandle, error) {
+	view, err := a.runtimeRecorder.Store().LoadSession(ctx, a.runtimeRecorder.SessionID())
+	if err != nil {
+		return agentledger.AttemptHandle{}, err
+	}
+	unresolved, exists := unresolvedToolAction(agentledger.SelectRun(view, a.runtimeRecorder.RunID()), call.ID)
+	if !exists {
+		return a.runtimeRecorder.BeforeToolCallWithEffect(ctx, turnID, payload, a.toolEffect(call))
+	}
+	// A restored AgentGo transcript re-emits the same ToolCall ID. Keep that
+	// physical retry under the original logical Action and its fixed Effect.
+	decision := a.canRetryTool(unresolved.Action, unresolved.Attempt, call)
+	if !decision.Approved {
+		return agentledger.AttemptHandle{}, fmt.Errorf("unresolved tool action %s attempt %s is not approved for retry", unresolved.Action.ID, unresolved.Attempt.ID)
+	}
+	for key, value := range decision.Metadata {
+		if _, reserved := payload[key]; !reserved {
+			payload[key] = value
+		}
+	}
+	retry, err := a.runtimeRecorder.Retry(ctx, unresolved.Action.ID, unresolved.Attempt.AttemptNo+1, payload)
+	if err != nil {
+		return agentledger.AttemptHandle{}, err
+	}
+	// The old Attempt remains an immutable record of an unknown outcome. Close
+	// its execution lifecycle before invoking the external tool again; recovery
+	// policy can still inspect the structured reason and the superseding Attempt.
+	for _, prior := range unresolved.All {
+		if _, err := a.runtimeRecorder.Record(ctx, agentledger.EventTypeAttemptFailed, prior.Attempt.ID, map[string]any{
+			"error": map[string]any{
+				"type":    "outcome_unknown",
+				"message": "superseded by an authorized retry",
+			},
+			"superseded_by_attempt_id": retry.AttemptID,
+		}, prior.RequestedEventID); err != nil {
+			return agentledger.AttemptHandle{}, fmt.Errorf("close superseded tool attempt %s: %w", prior.Attempt.ID, err)
+		}
+	}
+	return retry, nil
+}
+
+type unresolvedAttempt struct {
+	Attempt          agentledger.Attempt
+	RequestedEventID string
+}
+
+type unresolvedTool struct {
+	Action  agentledger.Action
+	Attempt agentledger.Attempt
+	All     []unresolvedAttempt
+}
+
+func unresolvedToolAction(view agentledger.RunView, toolCallID string) (unresolvedTool, bool) {
+	actions := make(map[string]agentledger.Action, len(view.Actions))
+	for _, action := range view.Actions {
+		if action.Type == agentledger.ActionTypeToolCall {
+			actions[action.ID] = action
+		}
+	}
+	attempts := make(map[string]agentledger.Attempt, len(view.Attempts))
+	for _, attempt := range view.Attempts {
+		if _, ok := actions[attempt.ActionID]; ok {
+			attempts[attempt.ID] = attempt
+		}
+	}
+	terminal := make(map[string]bool, len(attempts))
+	requested := make(map[string]agentledger.StoredEvent, len(attempts))
+	for _, event := range view.Events {
+		if _, ok := attempts[event.SubjectID]; !ok {
+			continue
+		}
+		switch event.EventType {
+		case agentledger.EventTypeAttemptRequested:
+			requested[event.SubjectID] = event
+		case agentledger.EventTypeAttemptCompleted, agentledger.EventTypeAttemptFailed:
+			terminal[event.SubjectID] = true
+		}
+	}
+	var selected agentledger.Attempt
+	for attemptID, event := range requested {
+		attempt := attempts[attemptID]
+		callID, _ := event.Payload["tool_call_id"].(string)
+		if callID == toolCallID && !terminal[attemptID] && attempt.AttemptNo > selected.AttemptNo {
+			selected = attempt
+		}
+	}
+	if selected.ID == "" {
+		return unresolvedTool{}, false
+	}
+	result := unresolvedTool{Action: actions[selected.ActionID], Attempt: selected}
+	for attemptID, event := range requested {
+		attempt := attempts[attemptID]
+		callID, _ := event.Payload["tool_call_id"].(string)
+		if attempt.ActionID == selected.ActionID && callID == toolCallID && !terminal[attemptID] {
+			result.All = append(result.All, unresolvedAttempt{Attempt: attempt, RequestedEventID: event.ID})
+		}
+	}
+	return result, true
 }
 
 // Restore replaces an idle AgentGo transcript with its last durably committed prefix.

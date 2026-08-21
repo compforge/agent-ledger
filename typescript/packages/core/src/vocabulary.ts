@@ -8,6 +8,25 @@ export const ActionType = {
 
 export type CoreActionType = (typeof ActionType)[keyof typeof ActionType];
 
+export const EffectKind = {
+  NONE: "none",
+  READ: "read",
+  WRITE: "write",
+  UNKNOWN: "unknown",
+} as const;
+
+export type CoreEffectKind = (typeof EffectKind)[keyof typeof EffectKind];
+
+export const Idempotency = {
+  NOT_APPLICABLE: "not_applicable",
+  INHERENT: "inherent",
+  KEYED: "keyed",
+  NONE: "none",
+  UNKNOWN: "unknown",
+} as const;
+
+export type CoreIdempotency = (typeof Idempotency)[keyof typeof Idempotency];
+
 /** Core values are portable lifecycle and framework-state facts. */
 export const EventType = {
   SESSION_STARTED: "session.started",

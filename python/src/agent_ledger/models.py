@@ -37,6 +37,21 @@ class ActionType(StrEnum):
     CHECKPOINT = "checkpoint"
 
 
+class EffectKind(StrEnum):
+    NONE = "none"
+    READ = "read"
+    WRITE = "write"
+    UNKNOWN = "unknown"
+
+
+class Idempotency(StrEnum):
+    NOT_APPLICABLE = "not_applicable"
+    INHERENT = "inherent"
+    KEYED = "keyed"
+    NONE = "none"
+    UNKNOWN = "unknown"
+
+
 class EventType(StrEnum):
     SESSION_STARTED = "session.started"
     SESSION_COMPLETED = "session.completed"
@@ -162,6 +177,13 @@ class Turn(BaseModel):
         return _require_timezone("created_at", value)
 
 
+class Effect(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: EffectKind = EffectKind.UNKNOWN
+    idempotency: Idempotency = Idempotency.UNKNOWN
+
+
 class Action(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -169,6 +191,7 @@ class Action(BaseModel):
     turn_id: str = Field(pattern=UUID7_PATTERN)
     type: str = Field(min_length=1)
     parent_action_id: str | None = Field(default=None, pattern=UUID7_PATTERN)
+    effect: Effect = Field(default_factory=Effect)
     created_at: datetime = Field(default_factory=utc_now)
 
     @field_validator("created_at")

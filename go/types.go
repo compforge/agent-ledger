@@ -29,11 +29,37 @@ type Turn struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type EffectKind string
+
+type Idempotency string
+
+// Effect is fixed before an Action is executed. Unknown values deliberately
+// preserve uncertainty so callers can apply their own recovery policy.
+type Effect struct {
+	Kind        EffectKind  `json:"kind"`
+	Idempotency Idempotency `json:"idempotency"`
+}
+
+func UnknownEffect() Effect {
+	return Effect{Kind: EffectKindUnknown, Idempotency: IdempotencyUnknown}
+}
+
+func NormalizeEffect(effect Effect) Effect {
+	if effect.Kind == "" {
+		effect.Kind = EffectKindUnknown
+	}
+	if effect.Idempotency == "" {
+		effect.Idempotency = IdempotencyUnknown
+	}
+	return effect
+}
+
 type Action struct {
 	ID             string `json:"id"`
 	TurnID         string `json:"turn_id"`
 	Type           string `json:"type"`
 	ParentActionID string `json:"parent_action_id,omitempty"`
+	Effect         Effect `json:"effect"`
 	CreatedAt      string `json:"created_at"`
 }
 
@@ -219,7 +245,14 @@ func NewTurn(laneID string) Turn {
 }
 
 func NewAction(turnID, actionType, parentActionID string) Action {
-	return Action{ID: NewID(), TurnID: turnID, Type: actionType, ParentActionID: parentActionID, CreatedAt: now()}
+	return NewActionWithEffect(turnID, actionType, parentActionID, UnknownEffect())
+}
+
+func NewActionWithEffect(turnID, actionType, parentActionID string, effect Effect) Action {
+	return Action{
+		ID: NewID(), TurnID: turnID, Type: actionType, ParentActionID: parentActionID,
+		Effect: NormalizeEffect(effect), CreatedAt: now(),
+	}
 }
 
 func NewAttempt(actionID string, attemptNo int) Attempt {

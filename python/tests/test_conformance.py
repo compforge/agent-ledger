@@ -7,7 +7,9 @@ from jsonschema import Draft202012Validator, FormatChecker
 from agent_ledger.models import (
     ActionType,
     Checkpoint,
+    EffectKind,
     EventType,
+    Idempotency,
     ProposedEvent,
     canonical_append_digest,
 )
@@ -49,4 +51,6 @@ def test_core_vocabulary_matches_cross_language_registry() -> None:
     vocabulary = json.loads((root / "spec/vocabulary.json").read_text(encoding="utf-8"))
 
     assert [item.value for item in ActionType] == vocabulary["action_types"]
+    assert [item.value for item in EffectKind] == vocabulary["effect_kinds"]
+    assert [item.value for item in Idempotency] == vocabulary["idempotency"]
     assert [item.value for item in EventType] == vocabulary["event_types"]

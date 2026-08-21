@@ -38,6 +38,8 @@ CREATE TABLE ledger_actions (
     turn_id CHAR(36) NOT NULL COMMENT 'Logical reference to ledger_turns.id',
     type VARCHAR(191) NOT NULL,
     parent_action_id CHAR(36) NULL COMMENT 'Logical reference to ledger_actions.id',
+    effect_kind VARCHAR(32) NOT NULL DEFAULT 'unknown',
+    effect_idempotency VARCHAR(32) NOT NULL DEFAULT 'unknown',
     created_at TIMESTAMP(6) NOT NULL,
     PRIMARY KEY (id),
     KEY ix_ledger_actions_turn (turn_id),

@@ -153,11 +153,17 @@ func (r *LaneRecorder) FailTurn(ctx context.Context, turnID string, failure erro
 }
 
 func (r *LaneRecorder) BeforeModelCall(ctx context.Context, turnID string, payload map[string]any) (AttemptHandle, error) {
-	return r.beforeCall(ctx, ActionTypeModelCall, turnID, payload, Action{}, 1)
+	return r.beforeCall(ctx, ActionTypeModelCall, turnID, payload, Action{}, Effect{
+		Kind: EffectKindNone, Idempotency: IdempotencyNotApplicable,
+	}, 1)
 }
 
 func (r *LaneRecorder) BeforeToolCall(ctx context.Context, turnID string, payload map[string]any) (AttemptHandle, error) {
-	return r.beforeCall(ctx, ActionTypeToolCall, turnID, payload, Action{}, 1)
+	return r.BeforeToolCallWithEffect(ctx, turnID, payload, UnknownEffect())
+}
+
+func (r *LaneRecorder) BeforeToolCallWithEffect(ctx context.Context, turnID string, payload map[string]any, effect Effect) (AttemptHandle, error) {
+	return r.beforeCall(ctx, ActionTypeToolCall, turnID, payload, Action{}, effect, 1)
 }
 
 func (r *LaneRecorder) Retry(ctx context.Context, actionID string, attemptNo int, payload map[string]any) (AttemptHandle, error) {
@@ -171,7 +177,7 @@ func (r *LaneRecorder) Retry(ctx context.Context, actionID string, attemptNo int
 	if action.Type != ActionTypeModelCall && action.Type != ActionTypeToolCall {
 		return AttemptHandle{}, fmt.Errorf("action %s is not retryable", actionID)
 	}
-	return r.beforeCall(ctx, action.Type, action.TurnID, payload, action, attemptNo)
+	return r.beforeCall(ctx, action.Type, action.TurnID, payload, action, action.Effect, attemptNo)
 }
 
 func (r *LaneRecorder) ModelCompleted(ctx context.Context, attempt AttemptHandle, payload map[string]any) error {
@@ -235,9 +241,9 @@ func (r *LaneRecorder) Child(ctx context.Context, runID string, actor Actor, cau
 	})
 }
 
-func (r *LaneRecorder) beforeCall(ctx context.Context, actionType, turnID string, payload map[string]any, action Action, attemptNo int) (AttemptHandle, error) {
+func (r *LaneRecorder) beforeCall(ctx context.Context, actionType, turnID string, payload map[string]any, action Action, effect Effect, attemptNo int) (AttemptHandle, error) {
 	if action.ID == "" {
-		action = NewAction(turnID, actionType, "")
+		action = NewActionWithEffect(turnID, actionType, "", effect)
 		if err := r.store.CreateAction(ctx, action); err != nil {
 			return AttemptHandle{}, err
 		}

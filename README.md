@@ -40,7 +40,8 @@ Checkpoint key → Checkpoint revision* ── optional Lane/Event anchor
 - `Lane` is one serial line inside a Run and the optimistic-concurrency boundary. A Run normally
   has a `main` Lane and may have branch or framework-native-state Lanes.
 - `Turn` is a stable interaction boundary.
-- `Action` is logical work such as `model_call`, `tool_call`, or `compact`.
+- `Action` is logical work such as `model_call`, `tool_call`, or `compact`; its fixed `Effect`
+  records external-effect kind and idempotency before execution.
 - `Attempt` is one physical try of an Action; retrying creates a new `attempt_no`.
 - `Event` is an immutable lifecycle, input, output, or audit fact about any hierarchy subject.
 - `Actor` stores stable producer identity once; an optional upstream `key` resolves the same Actor
@@ -48,7 +49,8 @@ Checkpoint key → Checkpoint revision* ── optional Lane/Event anchor
 
 Session and Run IDs are supplied by the host. Ledger-owned IDs use UUIDv7. Requested Events are
 committed before external calls. A requested Attempt without a terminal Event is unresolved after
-a crash and must be reconciled; a side-effecting tool is never silently retried.
+a crash and must be reconciled. Ledger preserves the Action's Effect but leaves retry decisions to
+the caller; an unknown or non-idempotent write is never silently retried.
 
 SDKs export constants for the Core Action and Event vocabulary. The stored fields remain open
 strings: framework and application extensions use namespaced values and are preserved by Stores.

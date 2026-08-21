@@ -24,11 +24,17 @@ export interface Turn {
   created_at: string;
 }
 
+export interface Effect {
+  kind: "none" | "read" | "write" | "unknown";
+  idempotency: "not_applicable" | "inherent" | "keyed" | "none" | "unknown";
+}
+
 export interface Action {
   id: string;
   turn_id: string;
   type: string;
   parent_action_id?: string;
+  effect: Effect;
   created_at: string;
 }
 
@@ -197,10 +203,16 @@ export function newTurn(laneId: string): Turn {
   return { id: newId(), lane_id: laneId, created_at: now() };
 }
 
-export function newAction(turnId: string, type: string, parentActionId?: string): Action {
+export function newAction(
+  turnId: string,
+  type: string,
+  parentActionId?: string,
+  effect: Effect = { kind: "unknown", idempotency: "unknown" },
+): Action {
   return {
     id: newId(), turn_id: turnId, type,
     ...(parentActionId === undefined ? {} : { parent_action_id: parentActionId }),
+    effect,
     created_at: now(),
   };
 }

@@ -11,13 +11,14 @@ import {
   type Actor,
   type AppendReceipt,
   type AttemptHandle,
+  type Effect,
   type JsonValue,
   type Lane,
   type ProposedEvent,
   type StoredEvent,
   type Turn,
 } from "./types.js";
-import { ActionType, EventType } from "./vocabulary.js";
+import { ActionType, EffectKind, EventType, Idempotency } from "./vocabulary.js";
 
 export interface CausalParent {
   runId: string;
@@ -145,18 +146,25 @@ export class LaneRecorder {
   }
 
   beforeModelCall(turnId: string, payload: { [key: string]: JsonValue }): Promise<AttemptHandle> {
-    return this.#beforeCall(ActionType.MODEL_CALL, turnId, payload, undefined, 1);
+    return this.#beforeCall(
+      ActionType.MODEL_CALL, turnId, payload, undefined,
+      { kind: EffectKind.NONE, idempotency: Idempotency.NOT_APPLICABLE }, 1,
+    );
   }
 
-  beforeToolCall(turnId: string, payload: { [key: string]: JsonValue }): Promise<AttemptHandle> {
-    return this.#beforeCall(ActionType.TOOL_CALL, turnId, payload, undefined, 1);
+  beforeToolCall(
+    turnId: string,
+    payload: { [key: string]: JsonValue },
+    effect: Effect = { kind: EffectKind.UNKNOWN, idempotency: Idempotency.UNKNOWN },
+  ): Promise<AttemptHandle> {
+    return this.#beforeCall(ActionType.TOOL_CALL, turnId, payload, undefined, effect, 1);
   }
 
   async retry(actionId: string, attemptNo: number, payload: { [key: string]: JsonValue }): Promise<AttemptHandle> {
     const action = await this.store.getAction(actionId);
     if (action === undefined) throw new EntityNotFound(`action ${actionId}`);
     if (action.type !== ActionType.MODEL_CALL && action.type !== ActionType.TOOL_CALL) throw new Error(`action ${actionId} is not retryable`);
-    return this.#beforeCall(action.type, action.turn_id, payload, action, attemptNo);
+    return this.#beforeCall(action.type, action.turn_id, payload, action, action.effect, attemptNo);
   }
 
   modelCompleted(attempt: AttemptHandle, payload: { [key: string]: JsonValue }): Promise<StoredEvent> {
@@ -208,9 +216,10 @@ export class LaneRecorder {
     turnId: string,
     payload: { [key: string]: JsonValue },
     action: Action | undefined,
+    effect: Effect,
     attemptNo: number,
   ): Promise<AttemptHandle> {
-    const targetAction = action ?? newAction(turnId, actionType);
+    const targetAction = action ?? newAction(turnId, actionType, undefined, effect);
     if (action === undefined) await this.store.createAction(targetAction);
     const attempt = newAttempt(targetAction.id, attemptNo);
     await this.store.createAttempt(attempt);

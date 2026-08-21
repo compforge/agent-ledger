@@ -6,6 +6,19 @@
     "compact",
     "checkpoint"
   ],
+  "effect_kinds": [
+    "none",
+    "read",
+    "write",
+    "unknown"
+  ],
+  "idempotency": [
+    "not_applicable",
+    "inherent",
+    "keyed",
+    "none",
+    "unknown"
+  ],
   "event_types": [
     "session.started",
     "session.completed",

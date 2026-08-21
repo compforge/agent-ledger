@@ -8,6 +8,23 @@ const (
 	ActionTypeCheckpoint = "checkpoint"
 )
 
+// Effect Kind classifies whether an Action can change state outside the Harness.
+const (
+	EffectKindNone    EffectKind = "none"
+	EffectKindRead    EffectKind = "read"
+	EffectKindWrite   EffectKind = "write"
+	EffectKindUnknown EffectKind = "unknown"
+)
+
+// Idempotency describes whether repeating an Action preserves its effect.
+const (
+	IdempotencyNotApplicable Idempotency = "not_applicable"
+	IdempotencyInherent      Idempotency = "inherent"
+	IdempotencyKeyed         Idempotency = "keyed"
+	IdempotencyNone          Idempotency = "none"
+	IdempotencyUnknown       Idempotency = "unknown"
+)
+
 // Core Event types are portable lifecycle and framework-state facts. EventType remains open to extensions.
 const (
 	EventTypeSessionStarted                = "session.started"
