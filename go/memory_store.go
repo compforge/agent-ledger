@@ -25,6 +25,7 @@ var (
 type MemoryEventStore struct {
 	mu                sync.Mutex
 	actors            map[string]Actor
+	actorKeys         map[string]string
 	lanes             map[string]Lane
 	laneNames         map[string]string
 	turns             map[string]Turn
@@ -40,7 +41,8 @@ type MemoryEventStore struct {
 
 func NewMemoryEventStore() *MemoryEventStore {
 	return &MemoryEventStore{
-		actors: make(map[string]Actor), lanes: make(map[string]Lane), laneNames: make(map[string]string),
+		actors: make(map[string]Actor), actorKeys: make(map[string]string),
+		lanes: make(map[string]Lane), laneNames: make(map[string]string),
 		turns: make(map[string]Turn), actions: make(map[string]Action),
 		attempts: make(map[string]Attempt), attemptNumbers: make(map[string]struct{}),
 		events: make(map[string]StoredEvent), laneEvents: make(map[string][]StoredEvent),
@@ -58,6 +60,12 @@ func (s *MemoryEventStore) CreateActor(ctx context.Context, actor Actor) error {
 	if _, ok := s.actors[actor.ID]; ok {
 		return fmt.Errorf("%w: actor %s", ErrEntityConflict, actor.ID)
 	}
+	if actor.Key != "" {
+		if _, ok := s.actorKeys[actor.Key]; ok {
+			return fmt.Errorf("%w: actor key %s", ErrEntityConflict, actor.Key)
+		}
+		s.actorKeys[actor.Key] = actor.ID
+	}
 	s.actors[actor.ID] = actor
 	return nil
 }
@@ -70,6 +78,49 @@ func (s *MemoryEventStore) GetActor(ctx context.Context, id string) (Actor, bool
 	defer s.mu.Unlock()
 	value, ok := s.actors[id]
 	return value, ok, nil
+}
+
+func (s *MemoryEventStore) GetActorByKey(ctx context.Context, key string) (Actor, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return Actor{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, ok := s.actorKeys[key]
+	if !ok {
+		return Actor{}, false, nil
+	}
+	return s.actors[id], true, nil
+}
+
+func (s *MemoryEventStore) EnsureActor(ctx context.Context, actor Actor) (Actor, error) {
+	if err := ctx.Err(); err != nil {
+		return Actor{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if actor.Key != "" {
+		if id, ok := s.actorKeys[actor.Key]; ok {
+			return ensureActorIdentity(s.actors[id], actor)
+		}
+	} else if stored, ok := s.actors[actor.ID]; ok {
+		return ensureActorIdentity(stored, actor)
+	}
+	if _, ok := s.actors[actor.ID]; ok {
+		return Actor{}, fmt.Errorf("%w: actor %s", ErrEntityConflict, actor.ID)
+	}
+	s.actors[actor.ID] = actor
+	if actor.Key != "" {
+		s.actorKeys[actor.Key] = actor.ID
+	}
+	return actor, nil
+}
+
+func ensureActorIdentity(stored, proposed Actor) (Actor, error) {
+	if stored.Key != proposed.Key || stored.Type != proposed.Type || stored.Framework != proposed.Framework {
+		return Actor{}, fmt.Errorf("%w: actor key %s", ErrEntityConflict, proposed.Key)
+	}
+	return stored, nil
 }
 
 func (s *MemoryEventStore) CreateLane(ctx context.Context, lane Lane) error {
@@ -251,7 +302,7 @@ func (s *MemoryEventStore) SaveCheckpoint(ctx context.Context, expectedRevision 
 		return Checkpoint{}, fmt.Errorf("%w: actor %s", ErrEntityNotFound, proposed.ActorID)
 	}
 	actualRevision := int64(0)
-	if id := s.latestCheckpoints[proposed.CheckpointKey]; id != "" {
+	if id := s.latestCheckpoints[proposed.Key]; id != "" {
 		actualRevision = s.checkpoints[id].Revision
 	}
 	if actualRevision != expectedRevision {
@@ -265,7 +316,7 @@ func (s *MemoryEventStore) SaveCheckpoint(ctx context.Context, expectedRevision 
 	}
 	stored := Checkpoint{ProposedCheckpoint: snapshot, Revision: actualRevision + 1, CreatedAt: now()}
 	s.checkpoints[stored.ID] = stored
-	s.latestCheckpoints[stored.CheckpointKey] = stored.ID
+	s.latestCheckpoints[stored.Key] = stored.ID
 	return cloneOne(stored)
 }
 
@@ -283,13 +334,13 @@ func (s *MemoryEventStore) GetCheckpoint(ctx context.Context, id string) (Checkp
 	return cloned, true, err
 }
 
-func (s *MemoryEventStore) LoadLatestCheckpoint(ctx context.Context, checkpointKey string) (Checkpoint, bool, error) {
+func (s *MemoryEventStore) LoadLatestCheckpoint(ctx context.Context, key string) (Checkpoint, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return Checkpoint{}, false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	id := s.latestCheckpoints[checkpointKey]
+	id := s.latestCheckpoints[key]
 	if id == "" {
 		return Checkpoint{}, false, nil
 	}
@@ -551,7 +602,7 @@ func clone[T any](value T) (T, error) {
 func cloneOne[T any](value T) (T, error) { return clone(value) }
 
 func validateCheckpoint(value ProposedCheckpoint) error {
-	if value.SchemaVersion != "1.0" || value.ID == "" || value.CheckpointKey == "" || value.ActorID == "" || value.Format == "" {
+	if value.SchemaVersion != "1.0" || value.ID == "" || value.Key == "" || value.ActorID == "" || value.Format == "" {
 		return errors.New("checkpoint requires schema version, id, key, actor, and format")
 	}
 	if (value.State == nil) == (value.ArtifactRef == nil) {

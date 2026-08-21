@@ -4,9 +4,11 @@
 CREATE TABLE ledger_actors (
     id CHAR(36) NOT NULL,
     type VARCHAR(64) NOT NULL,
+    actor_key VARCHAR(191) NULL COMMENT 'Stable producer key supplied by the upstream system',
     framework VARCHAR(191) NULL,
     created_at TIMESTAMP(6) NOT NULL,
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_ledger_actors_key (actor_key)
 );
 
 CREATE TABLE ledger_lanes (

@@ -52,11 +52,7 @@ export class LaneRecorder {
   }
 
   static async open(options: RecorderOptions): Promise<LaneRecorder> {
-    const storedActor = await options.store.getActor(options.actor.id);
-    if (storedActor === undefined) await options.store.createActor(options.actor);
-    else if (storedActor.type !== options.actor.type || storedActor.framework !== options.actor.framework) {
-      throw new EntityConflict(`actor ${options.actor.id}`);
-    }
+    const actor = await options.store.ensureActor(options.actor);
 
     const laneName = options.laneName ?? "main";
     let lane: Lane | undefined;
@@ -87,7 +83,7 @@ export class LaneRecorder {
     if (options.parentLaneId !== undefined && lane.parent_lane_id !== options.parentLaneId) {
       throw new Error("lane parent does not match recorder options");
     }
-    return new LaneRecorder(options, lane);
+    return new LaneRecorder({ ...options, actor }, lane);
   }
 
   record(

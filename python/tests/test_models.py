@@ -69,10 +69,10 @@ def test_actor_is_extensible() -> None:
 def test_checkpoint_requires_exactly_one_state_source() -> None:
     actor = Actor(type="harness")
     with pytest.raises(ValidationError):
-        ProposedCheckpoint(checkpoint_key="key", actor_id=actor.id, format="application/json")
+        ProposedCheckpoint(key="key", actor_id=actor.id, format="application/json")
     with pytest.raises(ValidationError):
         ProposedCheckpoint(
-            checkpoint_key="key",
+            key="key",
             actor_id=actor.id,
             format="application/json",
             state={},
@@ -87,7 +87,7 @@ def test_checkpoint_requires_exactly_one_state_source() -> None:
 
 def test_checkpoint_id_is_uuid7() -> None:
     proposed = ProposedCheckpoint(
-        checkpoint_key="key",
+        key="key",
         actor_id=Actor(type="harness").id,
         format="application/json",
         state={},

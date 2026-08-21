@@ -38,6 +38,14 @@ from agent_ledger.models import (
 )
 from agent_ledger.stores._validation import validate_append
 
+_CREATE_ACTOR_LUA = r"""
+if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 1 then return 'conflict' end
+if ARGV[2] ~= '' and redis.call('HEXISTS', KEYS[2], ARGV[2]) == 1 then return 'conflict' end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+if ARGV[2] ~= '' then redis.call('HSET', KEYS[2], ARGV[2], ARGV[1]) end
+return 'ok'
+"""
+
 _CREATE_LANE_LUA = r"""
 if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 1 or redis.call('HEXISTS', KEYS[2], ARGV[2]) == 1 then
     return 'conflict'
@@ -164,29 +172,61 @@ class RedisEventStore:
         self._client = client
         self._root = f"{prefix}:{{ledger}}"
         self._operation_timeout = operation_timeout
+        self._create_actor_script = client.register_script(_CREATE_ACTOR_LUA)
         self._create_lane_script = client.register_script(_CREATE_LANE_LUA)
         self._create_child_script = client.register_script(_CREATE_CHILD_LUA)
         self._append_script = client.register_script(_APPEND_LUA)
         self._save_checkpoint_script = client.register_script(_SAVE_CHECKPOINT_LUA)
 
     async def create_actor(self, actor: Actor) -> None:
-        try:
-            created = await asyncio.wait_for(
-                cast(
-                    Awaitable[Any],
-                    self._client.hsetnx(self._key("actors"), actor.id, actor.model_dump_json()),
-                ),
-                timeout=self._operation_timeout,
-            )
-        except TimeoutError as error:
-            raise StoreError("Redis actor creation timed out") from error
-        except RedisError as error:
-            raise StoreError("Redis actor creation failed") from error
-        if not created:
+        result = await self._run_script(
+            self._create_actor_script,
+            [self._key("actors"), self._key("actor-keys")],
+            [actor.id, actor.key or "", actor.model_dump_json(exclude_none=True)],
+            "Redis actor creation",
+        )
+        if _decode(result) != "ok":
             raise EntityConflict("actor", actor.id)
 
     async def get_actor(self, actor_id: str) -> Actor | None:
         return cast(Actor | None, await self._get_model("actors", actor_id, Actor))
+
+    async def get_actor_by_key(self, key: str) -> Actor | None:
+        try:
+            actor_id = await asyncio.wait_for(
+                cast(Awaitable[Any], self._client.hget(self._key("actor-keys"), key)),
+                timeout=self._operation_timeout,
+            )
+        except TimeoutError as error:
+            raise StoreError("Redis actor lookup timed out") from error
+        except RedisError as error:
+            raise StoreError("Redis actor lookup failed") from error
+        if actor_id is None:
+            return None
+        return await self.get_actor(_decode(actor_id))
+
+    async def ensure_actor(self, actor: Actor) -> Actor:
+        stored = (
+            await self.get_actor_by_key(actor.key)
+            if actor.key is not None
+            else await self.get_actor(actor.id)
+        )
+        if stored is not None:
+            _require_same_actor(stored, actor)
+            return stored
+        try:
+            await self.create_actor(actor)
+            return actor
+        except EntityConflict:
+            stored = (
+                await self.get_actor_by_key(actor.key)
+                if actor.key is not None
+                else await self.get_actor(actor.id)
+            )
+            if stored is None:
+                raise
+            _require_same_actor(stored, actor)
+            return stored
 
     async def create_lane(self, lane: Lane) -> None:
         if lane.last_seq != 0:
@@ -296,7 +336,7 @@ class RedisEventStore:
             ],
             [
                 checkpoint.id,
-                checkpoint.checkpoint_key,
+                checkpoint.key,
                 expected_revision,
                 canonical_checkpoint_digest(checkpoint),
                 checkpoint.model_dump_json(exclude_none=True),
@@ -321,12 +361,12 @@ class RedisEventStore:
             await self._get_model("checkpoints", checkpoint_id, Checkpoint),
         )
 
-    async def load_latest_checkpoint(self, checkpoint_key: str) -> Checkpoint | None:
+    async def load_latest_checkpoint(self, key: str) -> Checkpoint | None:
         try:
             checkpoint_id = await asyncio.wait_for(
                 cast(
                     Awaitable[Any],
-                    self._client.hget(self._key("checkpoint-heads"), checkpoint_key),
+                    self._client.hget(self._key("checkpoint-heads"), key),
                 ),
                 timeout=self._operation_timeout,
             )
@@ -583,6 +623,15 @@ class RedisEventStore:
 
 def _lane_name_key(session_id: str, run_id: str, name: str) -> str:
     return _hash(f"{session_id}\x00{run_id}\x00{name}")
+
+
+def _require_same_actor(stored: Actor, proposed: Actor) -> None:
+    if (
+        stored.key != proposed.key
+        or stored.type != proposed.type
+        or stored.framework != proposed.framework
+    ):
+        raise EntityConflict("actor key", proposed.key or proposed.id)
 
 
 def _hash(value: str) -> str:

@@ -32,7 +32,7 @@ def test_checkpoint_schema_accepts_inline_state() -> None:
     checkpoint = {
         "schema_version": "1.0",
         "id": "018f0f43-7b9a-7cc1-8000-000000000001",
-        "checkpoint_key": "native-session",
+        "key": "native-session",
         "revision": 1,
         "actor_id": "018f0f43-7b9a-7cc1-8000-000000000002",
         "format": "application/vnd.compforge.test.state+json;version=1",

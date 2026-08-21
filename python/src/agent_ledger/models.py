@@ -63,6 +63,7 @@ class Actor(BaseModel):
 
     id: str = Field(default_factory=new_id, pattern=UUID7_PATTERN)
     type: str = Field(min_length=1)
+    key: str | None = Field(default=None, min_length=1)
     framework: str | None = Field(default=None, min_length=1)
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -94,7 +95,7 @@ class ProposedCheckpoint(BaseModel):
 
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     id: str = Field(default_factory=new_id, pattern=UUID7_PATTERN)
-    checkpoint_key: str = Field(min_length=1)
+    key: str = Field(min_length=1)
     actor_id: str = Field(pattern=UUID7_PATTERN)
     format: str = Field(min_length=1)
     state: dict[str, Any] | None = None

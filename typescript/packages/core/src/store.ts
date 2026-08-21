@@ -16,6 +16,8 @@ import type {
 export interface ActorStore {
   createActor(actor: Actor): Promise<void>;
   getActor(id: string): Promise<Actor | undefined>;
+  getActorByKey(key: string): Promise<Actor | undefined>;
+  ensureActor(actor: Actor): Promise<Actor>;
 }
 
 export interface EventStore extends ActorStore {
@@ -37,5 +39,5 @@ export interface EventStore extends ActorStore {
 export interface CheckpointStore extends ActorStore {
   saveCheckpoint(expectedRevision: number, checkpoint: ProposedCheckpoint): Promise<Checkpoint>;
   getCheckpoint(id: string): Promise<Checkpoint | undefined>;
-  loadLatestCheckpoint(checkpointKey: string): Promise<Checkpoint | undefined>;
+  loadLatestCheckpoint(key: string): Promise<Checkpoint | undefined>;
 }

@@ -3,6 +3,7 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 export interface Actor {
   id: string;
   type: string;
+  key?: string;
   framework?: string;
   created_at: string;
 }
@@ -54,7 +55,7 @@ export interface CheckpointAnchor {
 interface ProposedCheckpointBase {
   schema_version: "1.0";
   id: string;
-  checkpoint_key: string;
+  key: string;
   actor_id: string;
   format: string;
   anchor?: CheckpointAnchor;
@@ -178,6 +179,10 @@ export function newId(): string {
 
 export function newActor(type: string, framework?: string): Actor {
   return { id: newId(), type, ...(framework === undefined ? {} : { framework }), created_at: now() };
+}
+
+export function newActorWithKey(key: string, type: string, framework?: string): Actor & { key: string } {
+  return { id: newId(), type, key, ...(framework === undefined ? {} : { framework }), created_at: now() };
 }
 
 export function newLane(sessionId: string, runId: string, name = "main", parentLaneId?: string): Lane {
