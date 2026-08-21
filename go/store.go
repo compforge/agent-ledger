@@ -8,6 +8,8 @@ import (
 type ActorStore interface {
 	CreateActor(context.Context, Actor) error
 	GetActor(context.Context, string) (Actor, bool, error)
+	GetActorByKey(context.Context, string) (Actor, bool, error)
+	EnsureActor(context.Context, Actor) (Actor, error)
 }
 
 type EventStore interface {

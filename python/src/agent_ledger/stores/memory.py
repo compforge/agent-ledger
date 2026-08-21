@@ -38,6 +38,7 @@ class MemoryEventStore:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._actors: dict[str, Actor] = {}
+        self._actor_keys: dict[str, str] = {}
         self._lanes: dict[str, Lane] = {}
         self._lane_names: dict[tuple[str, str, str], str] = {}
         self._turns: dict[str, Turn] = {}
@@ -52,14 +53,42 @@ class MemoryEventStore:
 
     async def create_actor(self, actor: Actor) -> None:
         async with self._lock:
-            if actor.id in self._actors:
+            if actor.id in self._actors or (
+                actor.key is not None and actor.key in self._actor_keys
+            ):
                 raise EntityConflict("actor", actor.id)
             self._actors[actor.id] = actor.model_copy(deep=True)
+            if actor.key is not None:
+                self._actor_keys[actor.key] = actor.id
 
     async def get_actor(self, actor_id: str) -> Actor | None:
         async with self._lock:
             actor = self._actors.get(actor_id)
             return actor.model_copy(deep=True) if actor is not None else None
+
+    async def get_actor_by_key(self, key: str) -> Actor | None:
+        async with self._lock:
+            actor_id = self._actor_keys.get(key)
+            actor = self._actors.get(actor_id) if actor_id is not None else None
+            return actor.model_copy(deep=True) if actor is not None else None
+
+    async def ensure_actor(self, actor: Actor) -> Actor:
+        async with self._lock:
+            stored = (
+                self._actors.get(self._actor_keys.get(actor.key, ""))
+                if actor.key is not None
+                else self._actors.get(actor.id)
+            )
+            if stored is not None:
+                _require_same_actor(stored, actor)
+                return stored.model_copy(deep=True)
+            if actor.id in self._actors:
+                raise EntityConflict("actor", actor.id)
+            snapshot = actor.model_copy(deep=True)
+            self._actors[actor.id] = snapshot
+            if actor.key is not None:
+                self._actor_keys[actor.key] = actor.id
+            return snapshot.model_copy(deep=True)
 
     async def create_lane(self, lane: Lane) -> None:
         async with self._lock:
@@ -154,7 +183,7 @@ class MemoryEventStore:
                 return previous.model_copy(deep=True)
             if checkpoint.actor_id not in self._actors:
                 raise EntityNotFound("actor", checkpoint.actor_id)
-            latest = self._latest_checkpoints.get(checkpoint.checkpoint_key)
+            latest = self._latest_checkpoints.get(checkpoint.key)
             actual_revision = latest.revision if latest is not None else 0
             if actual_revision != expected_revision:
                 raise CheckpointConflict(expected_revision, actual_revision)
@@ -172,7 +201,7 @@ class MemoryEventStore:
                 created_at=utc_now(),
             )
             self._checkpoints[stored.id] = stored
-            self._latest_checkpoints[stored.checkpoint_key] = stored
+            self._latest_checkpoints[stored.key] = stored
             return stored.model_copy(deep=True)
 
     async def get_checkpoint(self, checkpoint_id: str) -> Checkpoint | None:
@@ -180,9 +209,9 @@ class MemoryEventStore:
             value = self._checkpoints.get(checkpoint_id)
             return value.model_copy(deep=True) if value is not None else None
 
-    async def load_latest_checkpoint(self, checkpoint_key: str) -> Checkpoint | None:
+    async def load_latest_checkpoint(self, key: str) -> Checkpoint | None:
         async with self._lock:
-            value = self._latest_checkpoints.get(checkpoint_key)
+            value = self._latest_checkpoints.get(key)
             return value.model_copy(deep=True) if value is not None else None
 
     async def append(
@@ -320,3 +349,12 @@ class MemoryEventStore:
 
 def _proposed_checkpoint(value: Checkpoint) -> ProposedCheckpoint:
     return ProposedCheckpoint.model_validate(value.model_dump(exclude={"revision", "created_at"}))
+
+
+def _require_same_actor(stored: Actor, proposed: Actor) -> None:
+    if (
+        stored.key != proposed.key
+        or stored.type != proposed.type
+        or stored.framework != proposed.framework
+    ):
+        raise EntityConflict("actor key", proposed.key or proposed.id)

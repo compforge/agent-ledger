@@ -17,6 +17,7 @@ export class SubjectMismatch extends Error {}
 
 export class MemoryEventStore implements EventStore, CheckpointStore {
   readonly #actors = new Map<string, Actor>();
+  readonly #actorKeys = new Map<string, string>();
   readonly #lanes = new Map<string, Lane>();
   readonly #laneNames = new Map<string, string>();
   readonly #turns = new Map<string, Turn>();
@@ -30,11 +31,30 @@ export class MemoryEventStore implements EventStore, CheckpointStore {
   readonly #latestCheckpoints = new Map<string, string>();
 
   async createActor(actor: Actor): Promise<void> {
+    if (actor.key !== undefined && this.#actorKeys.has(actor.key)) throw new EntityConflict(`actor key ${actor.key}`);
     this.#create(this.#actors, "actor", actor.id, actor);
+    if (actor.key !== undefined) this.#actorKeys.set(actor.key, actor.id);
   }
 
   async getActor(id: string): Promise<Actor | undefined> {
     return cloneOptional(this.#actors.get(id));
+  }
+
+  async getActorByKey(key: string): Promise<Actor | undefined> {
+    const id = this.#actorKeys.get(key);
+    return id === undefined ? undefined : cloneOptional(this.#actors.get(id));
+  }
+
+  async ensureActor(actor: Actor): Promise<Actor> {
+    const stored = actor.key === undefined
+      ? this.#actors.get(actor.id)
+      : this.#actors.get(this.#actorKeys.get(actor.key) ?? "");
+    if (stored !== undefined) {
+      requireSameActor(stored, actor);
+      return structuredClone(stored);
+    }
+    await this.createActor(actor);
+    return structuredClone(actor);
   }
 
   async createLane(lane: Lane): Promise<void> {
@@ -108,7 +128,7 @@ export class MemoryEventStore implements EventStore, CheckpointStore {
       return structuredClone(previous);
     }
     if (!this.#actors.has(checkpoint.actor_id)) throw new EntityNotFound(`actor ${checkpoint.actor_id}`);
-    const latestId = this.#latestCheckpoints.get(checkpoint.checkpoint_key);
+    const latestId = this.#latestCheckpoints.get(checkpoint.key);
     const actualRevision = latestId === undefined ? 0 : this.#checkpoints.get(latestId)!.revision;
     if (actualRevision !== expectedRevision) {
       throw new CheckpointConflict(`expected ${expectedRevision}, actual ${actualRevision}`);
@@ -127,7 +147,7 @@ export class MemoryEventStore implements EventStore, CheckpointStore {
       created_at: new Date().toISOString(),
     };
     this.#checkpoints.set(stored.id, stored);
-    this.#latestCheckpoints.set(stored.checkpoint_key, stored.id);
+    this.#latestCheckpoints.set(stored.key, stored.id);
     return structuredClone(stored);
   }
 
@@ -135,8 +155,8 @@ export class MemoryEventStore implements EventStore, CheckpointStore {
     return cloneOptional(this.#checkpoints.get(id));
   }
 
-  async loadLatestCheckpoint(checkpointKey: string): Promise<Checkpoint | undefined> {
-    const id = this.#latestCheckpoints.get(checkpointKey);
+  async loadLatestCheckpoint(key: string): Promise<Checkpoint | undefined> {
+    const id = this.#latestCheckpoints.get(key);
     return id === undefined ? undefined : structuredClone(this.#checkpoints.get(id)!);
   }
 
@@ -254,8 +274,14 @@ function cloneOptional<T>(value: T | undefined): T | undefined {
   return value === undefined ? undefined : structuredClone(value);
 }
 
+function requireSameActor(stored: Actor, proposed: Actor): void {
+  if (stored.key !== proposed.key || stored.type !== proposed.type || stored.framework !== proposed.framework) {
+    throw new EntityConflict(`actor key ${proposed.key ?? proposed.id}`);
+  }
+}
+
 function validateCheckpoint(value: ProposedCheckpoint): void {
-  if (value.schema_version !== "1.0" || value.id === "" || value.checkpoint_key === ""
+  if (value.schema_version !== "1.0" || value.id === "" || value.key === ""
     || value.actor_id === "" || value.format === "") {
     throw new TypeError("checkpoint requires schema version, id, key, actor, and format");
   }

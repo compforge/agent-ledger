@@ -23,7 +23,7 @@ async def test_checkpoint_versions_and_idempotency(event_store: EventStore) -> N
     actor = Actor(type="harness", framework="test")
     await store.create_actor(actor)
     first = ProposedCheckpoint(
-        checkpoint_key="native-session",
+        key="native-session",
         actor_id=actor.id,
         format="application/vnd.compforge.test.state+json;version=1",
         state={"messages": ["hello"]},
@@ -34,23 +34,23 @@ async def test_checkpoint_versions_and_idempotency(event_store: EventStore) -> N
     assert saved.revision == 1
     assert await store.save_checkpoint(0, first) == saved
     assert await store.get_checkpoint(first.id) == saved
-    assert await store.load_latest_checkpoint(first.checkpoint_key) == saved
+    assert await store.load_latest_checkpoint(first.key) == saved
 
     second = ProposedCheckpoint(
-        checkpoint_key=first.checkpoint_key,
+        key=first.key,
         actor_id=actor.id,
         format=first.format,
         state={"messages": ["hello", "world"]},
     )
     latest = await store.save_checkpoint(1, second)
     assert latest.revision == 2
-    assert await store.load_latest_checkpoint(first.checkpoint_key) == latest
+    assert await store.load_latest_checkpoint(first.key) == latest
 
     with pytest.raises(CheckpointConflict):
         await store.save_checkpoint(
             0,
             ProposedCheckpoint(
-                checkpoint_key=first.checkpoint_key,
+                key=first.key,
                 actor_id=actor.id,
                 format=first.format,
                 state={"messages": []},
@@ -77,7 +77,7 @@ async def test_checkpoint_can_anchor_a_ledger_event(event_store: EventStore) -> 
     )
     await event_store.append(lane.id, 0, new_id(), [event])
     checkpoint = ProposedCheckpoint(
-        checkpoint_key="native-session",
+        key="native-session",
         actor_id=actor.id,
         format="application/vnd.compforge.test.state+json;version=1",
         state={"cursor": 1},
@@ -98,7 +98,7 @@ async def test_checkpoint_can_reference_an_artifact(event_store: EventStore) -> 
     actor = Actor(type="harness", framework="test")
     await store.create_actor(actor)
     checkpoint = ProposedCheckpoint(
-        checkpoint_key="large-native-session",
+        key="large-native-session",
         actor_id=actor.id,
         format="application/vnd.compforge.test.state+json;version=1",
         artifact_ref=ArtifactRef(
@@ -121,7 +121,7 @@ async def test_sql_checkpoint_insert_reconciliation(event_store: EventStore) -> 
     actor = Actor(type="harness", framework="test")
     await event_store.create_actor(actor)
     checkpoint = ProposedCheckpoint(
-        checkpoint_key="native-session",
+        key="native-session",
         actor_id=actor.id,
         format="application/json",
         state={"messages": ["hello"]},
@@ -142,7 +142,7 @@ async def test_sql_checkpoint_insert_reconciliation(event_store: EventStore) -> 
     with pytest.raises(CheckpointConflict):
         await event_store._reconcile_checkpoint_integrity_error(
             ProposedCheckpoint(
-                checkpoint_key=checkpoint.checkpoint_key,
+                key=checkpoint.key,
                 actor_id=actor.id,
                 format=checkpoint.format,
                 state={"messages": ["other"]},

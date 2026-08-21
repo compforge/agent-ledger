@@ -17,7 +17,7 @@ Checkpoint 之后已经发生的动作。
 ## 对象
 
 ```text
-CheckpointKey
+Checkpoint key
   ├─ Checkpoint revision 1
   ├─ Checkpoint revision 2
   └─ Checkpoint revision 3 (latest)
@@ -29,7 +29,7 @@ CheckpointKey
 | --- | --- |
 | `schema_version` | Checkpoint envelope 的协议版本，约束 Ledger 字段 |
 | `id` | 本次保存请求的 UUIDv7，也作为幂等键 |
-| `checkpoint_key` | Harness 原生可恢复实例的稳定标识，用于组织多个 revision |
+| `key` | Harness 原生可恢复实例的稳定标识，用于组织多个 revision |
 | `revision` | Store 分配的单调版本；首个版本为 1 |
 | `actor_id` | 产生该状态的 Actor |
 | `format` | Adapter 解释的不透明格式，例如 `application/vnd.compforge.agentgo.message+json;version=1` |
@@ -55,7 +55,7 @@ lane_id + last_applied_seq + last_applied_event_id
 
 恢复时读取 `seq > last_applied_seq` 的 Events：
 
-1. 加载指定 `checkpoint_key` 的最新 Checkpoint。
+1. 加载指定 `key` 的最新 Checkpoint。
 2. Adapter 校验 `format` 并恢复 Harness 原生 State。
 3. 若存在 Anchor，按 Lane seq 重放已经完成动作的结果，而不是重新执行动作。
 4. 对只有 requested、没有终态的 Attempt 做对账、重试或人工处理。
@@ -66,7 +66,10 @@ lane_id + last_applied_seq + last_applied_event_id
 
 ## 保存契约
 
-`save_checkpoint(expected_revision, proposed_checkpoint)` 使用 CheckpointKey 级 OCC：
+`save_checkpoint(expected_revision, proposed_checkpoint)` 使用 Checkpoint key 级 OCC：
+
+公开模型统一使用 `key`；SQL Store 的 DB Model 可将其映射为 `checkpoint_key`，避免把数据库命名细节
+泄漏到 Harness 契约。Actor 的 `key` 与物理列 `actor_key` 采用同样边界。
 
 - 第一次保存传 `expected_revision = 0`，Store 返回 revision 1。
 - 后续保存必须携带当前 revision，成功后返回 revision + 1。

@@ -14,6 +14,7 @@ import {
   MemoryEventStore,
   newAction,
   newActor,
+  newActorWithKey,
   newAttempt,
   newId,
   newLane,
@@ -21,6 +22,18 @@ import {
   proposedEvent,
   proposedCheckpoint,
 } from "../src/index.js";
+
+test("actor key resolves stable producer identity", async () => {
+  const store = new MemoryEventStore();
+  const original = newActorWithKey("test/agent", "agent", "plain-loop");
+  await store.createActor(original);
+  assert.deepEqual(await store.getActorByKey(original.key), original);
+  const restarted = newActorWithKey(original.key, original.type, original.framework);
+  assert.deepEqual(await store.ensureActor(restarted), original);
+  await assert.rejects(
+    store.ensureActor(newActorWithKey(original.key, original.type, "other")),
+  );
+});
 
 test("core vocabulary matches the cross-language registry", async () => {
   const vocabulary = JSON.parse(
@@ -98,7 +111,7 @@ test("checkpoint save is versioned, idempotent, and optionally anchored", async 
   });
   await store.append(lane.id, 0, newId(), [event]);
   const proposed = proposedCheckpoint({
-    checkpoint_key: "native-session",
+    key: "native-session",
     actor_id: actor.id,
     format: "application/vnd.compforge.pi.session+json;version=1",
     state: { messages: ["hello"] },
@@ -110,16 +123,16 @@ test("checkpoint save is versioned, idempotent, and optionally anchored", async 
   assert.equal(first.revision, 1);
   assert.deepEqual(await store.saveCheckpoint(0, proposed), first);
   const second = proposedCheckpoint({
-    checkpoint_key: proposed.checkpoint_key,
+    key: proposed.key,
     actor_id: actor.id,
     format: proposed.format,
     state: { messages: ["hello", "world"] },
   });
   assert.equal((await store.saveCheckpoint(1, second)).revision, 2);
-  assert.equal((await store.loadLatestCheckpoint(proposed.checkpoint_key))?.id, second.id);
+  assert.equal((await store.loadLatestCheckpoint(proposed.key))?.id, second.id);
   await assert.rejects(
     store.saveCheckpoint(0, proposedCheckpoint({
-      checkpoint_key: proposed.checkpoint_key,
+      key: proposed.key,
       actor_id: actor.id,
       format: proposed.format,
       state: {},

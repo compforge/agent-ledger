@@ -7,7 +7,7 @@
   "required": [
     "schema_version",
     "id",
-    "checkpoint_key",
+    "key",
     "revision",
     "actor_id",
     "format",
@@ -17,7 +17,7 @@
   "properties": {
     "schema_version": { "const": "1.0" },
     "id": { "type": "string", "format": "uuid" },
-    "checkpoint_key": { "type": "string", "minLength": 1 },
+    "key": { "type": "string", "minLength": 1 },
     "revision": { "type": "integer", "minimum": 1 },
     "actor_id": { "type": "string", "format": "uuid" },
     "format": { "type": "string", "minLength": 1 },

@@ -76,8 +76,11 @@ class _Lane(_Base):
 class _Actor(_Base):
     __tablename__ = "ledger_actors"
 
+    __table_args__ = (UniqueConstraint("actor_key", name="uq_ledger_actors_key"),)
+
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     type: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_key: Mapped[str | None] = mapped_column(String(_ID_LENGTH), nullable=True)
     framework: Mapped[str | None] = mapped_column(String(_ID_LENGTH), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -209,6 +212,40 @@ class SqlEventStore:
         row = await self._get(_Actor, actor_id)
         return _actor_model(row) if row is not None else None
 
+    async def get_actor_by_key(self, key: str) -> Actor | None:
+        try:
+            async with asyncio.timeout(self._operation_timeout):
+                async with AsyncSession(self._engine) as session:
+                    row = await session.scalar(select(_Actor).where(_Actor.actor_key == key))
+                    return _actor_model(row) if row is not None else None
+        except TimeoutError as error:
+            raise StoreError("SQL actor lookup timed out") from error
+        except SQLAlchemyError as error:
+            raise StoreError("SQL actor lookup failed") from error
+
+    async def ensure_actor(self, actor: Actor) -> Actor:
+        stored = (
+            await self.get_actor_by_key(actor.key)
+            if actor.key is not None
+            else await self.get_actor(actor.id)
+        )
+        if stored is not None:
+            _require_same_actor(stored, actor)
+            return stored
+        try:
+            await self.create_actor(actor)
+            return actor
+        except EntityConflict:
+            stored = (
+                await self.get_actor_by_key(actor.key)
+                if actor.key is not None
+                else await self.get_actor(actor.id)
+            )
+            if stored is None:
+                raise
+            _require_same_actor(stored, actor)
+            return stored
+
     async def create_lane(self, lane: Lane) -> None:
         if lane.last_seq != 0:
             raise ValueError("a new lane must have last_seq 0")
@@ -311,7 +348,7 @@ class SqlEventStore:
                             raise EntityNotFound("actor", checkpoint.actor_id)
                         latest = await session.scalar(
                             select(_Checkpoint)
-                            .where(_Checkpoint.checkpoint_key == checkpoint.checkpoint_key)
+                            .where(_Checkpoint.checkpoint_key == checkpoint.key)
                             .order_by(_Checkpoint.revision.desc())
                             .limit(1)
                             .with_for_update()
@@ -369,7 +406,7 @@ class SqlEventStore:
                 raise CheckpointIdempotencyViolation(checkpoint.id)
             return previous
         try:
-            latest = await self.load_latest_checkpoint(checkpoint.checkpoint_key)
+            latest = await self.load_latest_checkpoint(checkpoint.key)
         except StoreError:
             raise StoreError("SQL checkpoint save failed") from insert_error
         actual_revision = latest.revision if latest is not None else 0
@@ -381,13 +418,13 @@ class SqlEventStore:
         row = await self._get(_Checkpoint, checkpoint_id)
         return _checkpoint_model(row) if row is not None else None
 
-    async def load_latest_checkpoint(self, checkpoint_key: str) -> Checkpoint | None:
+    async def load_latest_checkpoint(self, key: str) -> Checkpoint | None:
         try:
             async with asyncio.timeout(self._operation_timeout):
                 async with AsyncSession(self._engine) as session:
                     row = await session.scalar(
                         select(_Checkpoint)
-                        .where(_Checkpoint.checkpoint_key == checkpoint_key)
+                        .where(_Checkpoint.checkpoint_key == key)
                         .order_by(_Checkpoint.revision.desc())
                         .limit(1)
                     )
@@ -714,7 +751,13 @@ def _lane_row(value: Lane) -> _Lane:
 
 
 def _actor_row(value: Actor) -> _Actor:
-    return _Actor(**value.model_dump())
+    return _Actor(
+        id=value.id,
+        type=value.type,
+        actor_key=value.key,
+        framework=value.framework,
+        created_at=value.created_at,
+    )
 
 
 def _turn_row(value: Turn) -> _Turn:
@@ -738,7 +781,7 @@ def _checkpoint_row(value: Checkpoint) -> _Checkpoint:
     return _Checkpoint(
         id=value.id,
         schema_version=value.schema_version,
-        checkpoint_key=value.checkpoint_key,
+        checkpoint_key=value.key,
         revision=value.revision,
         actor_id=value.actor_id,
         format=value.format,
@@ -770,9 +813,19 @@ def _actor_model(row: _Actor) -> Actor:
     return Actor(
         id=row.id,
         type=row.type,
+        key=row.actor_key,
         framework=row.framework,
         created_at=_aware(row.created_at),
     )
+
+
+def _require_same_actor(stored: Actor, proposed: Actor) -> None:
+    if (
+        stored.key != proposed.key
+        or stored.type != proposed.type
+        or stored.framework != proposed.framework
+    ):
+        raise EntityConflict("actor key", proposed.key or proposed.id)
 
 
 def _turn_model(row: _Turn) -> Turn:
@@ -833,7 +886,7 @@ def _checkpoint_model(row: _Checkpoint) -> Checkpoint:
         {
             "schema_version": row.schema_version,
             "id": row.id,
-            "checkpoint_key": row.checkpoint_key,
+            "key": row.checkpoint_key,
             "revision": row.revision,
             "actor_id": row.actor_id,
             "format": row.format,

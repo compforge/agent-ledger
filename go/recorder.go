@@ -43,19 +43,16 @@ func OpenRecorder(ctx context.Context, options RecorderOptions) (*LaneRecorder, 
 	if options.LaneName == "" {
 		options.LaneName = "main"
 	}
-	storedActor, exists, err := options.Store.GetActor(ctx, options.Actor.ID)
+	storedActor, err := options.Store.EnsureActor(ctx, options.Actor)
 	if err != nil {
-		return nil, fmt.Errorf("get recorder actor: %w", err)
+		return nil, fmt.Errorf("ensure recorder actor: %w", err)
 	}
-	if !exists {
-		if err := options.Store.CreateActor(ctx, options.Actor); err != nil {
-			return nil, fmt.Errorf("create recorder actor: %w", err)
-		}
-	} else if storedActor.Type != options.Actor.Type || storedActor.Framework != options.Actor.Framework {
-		return nil, fmt.Errorf("%w: actor %s", ErrEntityConflict, options.Actor.ID)
-	}
+	options.Actor = storedActor
 
-	var lane Lane
+	var (
+		lane   Lane
+		exists bool
+	)
 	if options.LaneID != "" {
 		lane, exists, err = options.Store.GetLane(ctx, options.LaneID)
 		if err != nil {

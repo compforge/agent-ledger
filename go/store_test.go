@@ -13,7 +13,7 @@ func TestMemoryStoreExecutionHierarchyAndAppend(t *testing.T) {
 func testStoreContract(t *testing.T, store EventStore) {
 	t.Helper()
 	ctx := context.Background()
-	actor := NewActor("agent", "plain-loop")
+	actor := NewActorWithKey("test/agent", "agent", "plain-loop")
 	lane := NewLane("session-1", "run-1", "main", "")
 	turn := NewTurn(lane.ID)
 	action := NewAction(turn.ID, "model_call", "")
@@ -33,6 +33,19 @@ func testStoreContract(t *testing.T, store EventStore) {
 		if err := item.create(); err != nil {
 			t.Fatalf("create %s: %v", item.label, err)
 		}
+	}
+	byKey, ok, err := store.GetActorByKey(ctx, actor.Key)
+	if err != nil || !ok || byKey.ID != actor.ID {
+		t.Fatalf("actor by key = %#v, %v", byKey, err)
+	}
+	restarted := NewActorWithKey(actor.Key, actor.Type, actor.Framework)
+	ensured, err := store.EnsureActor(ctx, restarted)
+	if err != nil || ensured.ID != actor.ID {
+		t.Fatalf("ensure actor = %#v, %v", ensured, err)
+	}
+	changed := NewActorWithKey(actor.Key, actor.Type, "other-framework")
+	if _, err := store.EnsureActor(ctx, changed); !errors.Is(err, ErrEntityConflict) {
+		t.Fatalf("ensure changed actor error = %v, want entity conflict", err)
 	}
 	event := NewEvent("attempt.requested", lane.ID, attempt.ID, actor)
 	event.Payload = map[string]any{"model": "test"}
@@ -124,16 +137,16 @@ func TestMemoryStoreCheckpointVersionsAndAnchor(t *testing.T) {
 	if err != nil || repeated.ID != first.ID {
 		t.Fatalf("idempotent save = %#v, %v", repeated, err)
 	}
-	second := NewCheckpoint(proposed.CheckpointKey, actor.ID, proposed.Format, map[string]any{"messages": []any{"hello", "world"}})
+	second := NewCheckpoint(proposed.Key, actor.ID, proposed.Format, map[string]any{"messages": []any{"hello", "world"}})
 	latest, err := store.SaveCheckpoint(ctx, 1, second)
 	if err != nil || latest.Revision != 2 {
 		t.Fatalf("second save = %#v, %v", latest, err)
 	}
-	loaded, ok, err := store.LoadLatestCheckpoint(ctx, proposed.CheckpointKey)
+	loaded, ok, err := store.LoadLatestCheckpoint(ctx, proposed.Key)
 	if err != nil || !ok || loaded.ID != second.ID {
 		t.Fatalf("latest checkpoint = %#v, %v", loaded, err)
 	}
-	if _, err := store.SaveCheckpoint(ctx, 0, NewCheckpoint(proposed.CheckpointKey, actor.ID, proposed.Format, map[string]any{})); !errors.Is(err, ErrCheckpointConflict) {
+	if _, err := store.SaveCheckpoint(ctx, 0, NewCheckpoint(proposed.Key, actor.ID, proposed.Format, map[string]any{})); !errors.Is(err, ErrCheckpointConflict) {
 		t.Fatalf("save error = %v, want checkpoint conflict", err)
 	}
 }

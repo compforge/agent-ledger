@@ -32,7 +32,7 @@ Session → Run → Lane → Turn → Action → Attempt
 
 Actor ────────────────────────────────↗
 
-CheckpointKey → Checkpoint revision* ── optional Lane/Event anchor
+Checkpoint key → Checkpoint revision* ── optional Lane/Event anchor
 ```
 
 - `Session` is one upstream task. `Run` is the upstream-defined grouping between Session and Lane;
@@ -43,7 +43,8 @@ CheckpointKey → Checkpoint revision* ── optional Lane/Event anchor
 - `Action` is logical work such as `model_call`, `tool_call`, or `compact`.
 - `Attempt` is one physical try of an Action; retrying creates a new `attempt_no`.
 - `Event` is an immutable lifecycle, input, output, or audit fact about any hierarchy subject.
-- `Actor` stores stable producer identity once; high-volume Events only retain `actor_id`.
+- `Actor` stores stable producer identity once; an optional upstream `key` resolves the same Actor
+  across producer restarts, while high-volume Events only retain `actor_id`.
 
 Session and Run IDs are supplied by the host. Ledger-owned IDs use UUIDv7. Requested Events are
 committed before external calls. A requested Attempt without a terminal Event is unresolved after
@@ -73,7 +74,8 @@ ownership relationships in application code.
 Applications inject an `EventStore`:
 
 ```text
-create_actor / create_lane / create_turn / create_action / create_attempt
+create_actor / get_actor_by_key / ensure_actor
+create_lane / create_turn / create_action / create_attempt
 append(lane_id, expected_last_seq, append_id, events)
 load_lane(lane_id, after_seq)
 load_run(session_id, run_id)
@@ -94,7 +96,7 @@ Applications that need recovery inject a `CheckpointStore`:
 ```text
 save_checkpoint(expected_revision, proposed_checkpoint)
 get_checkpoint(checkpoint_id)
-load_latest_checkpoint(checkpoint_key)
+load_latest_checkpoint(key)
 ```
 
 Checkpoint formats are opaque to Ledger, for example

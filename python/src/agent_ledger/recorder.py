@@ -102,11 +102,7 @@ class LaneRecorder:
             raise ValueError("lane identity does not match recorder options")
         if parent_lane_id is not None and lane.parent_lane_id != parent_lane_id:
             raise ValueError("lane parent does not match recorder options")
-        stored_actor = await store.get_actor(actor.id)
-        if stored_actor is None:
-            await store.create_actor(actor)
-        elif stored_actor.type != actor.type or stored_actor.framework != actor.framework:
-            raise EntityConflict("actor", actor.id)
+        actor = await store.ensure_actor(actor)
         return cls(
             store=store,
             lane=lane,

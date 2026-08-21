@@ -8,6 +8,7 @@ import (
 type Actor struct {
 	Type      string `json:"type"`
 	ID        string `json:"id"`
+	Key       string `json:"key,omitempty"`
 	Framework string `json:"framework,omitempty"`
 	CreatedAt string `json:"created_at"`
 }
@@ -59,7 +60,7 @@ type CheckpointAnchor struct {
 type ProposedCheckpoint struct {
 	SchemaVersion string            `json:"schema_version"`
 	ID            string            `json:"id"`
-	CheckpointKey string            `json:"checkpoint_key"`
+	Key           string            `json:"key"`
 	ActorID       string            `json:"actor_id"`
 	Format        string            `json:"format"`
 	State         map[string]any    `json:"state,omitempty"`
@@ -209,6 +210,10 @@ func NewActor(actorType, framework string) Actor {
 	return Actor{ID: NewID(), Type: actorType, Framework: framework, CreatedAt: now()}
 }
 
+func NewActorWithKey(key, actorType, framework string) Actor {
+	return Actor{ID: NewID(), Key: key, Type: actorType, Framework: framework, CreatedAt: now()}
+}
+
 func NewTurn(laneID string) Turn {
 	return Turn{ID: NewID(), LaneID: laneID, CreatedAt: now()}
 }
@@ -221,9 +226,9 @@ func NewAttempt(actionID string, attemptNo int) Attempt {
 	return Attempt{ID: NewID(), ActionID: actionID, AttemptNo: attemptNo, CreatedAt: now()}
 }
 
-func NewCheckpoint(checkpointKey, actorID, format string, state map[string]any) ProposedCheckpoint {
+func NewCheckpoint(key, actorID, format string, state map[string]any) ProposedCheckpoint {
 	return ProposedCheckpoint{
-		SchemaVersion: "1.0", ID: NewID(), CheckpointKey: checkpointKey, ActorID: actorID,
+		SchemaVersion: "1.0", ID: NewID(), Key: key, ActorID: actorID,
 		Format: format, State: state, Extensions: map[string]any{},
 	}
 }

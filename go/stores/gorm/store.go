@@ -55,6 +55,58 @@ func (s *Store) GetActor(ctx context.Context, id string) (agentledger.Actor, boo
 	return row.toModel(), true, nil
 }
 
+func (s *Store) GetActorByKey(ctx context.Context, key string) (agentledger.Actor, bool, error) {
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+	var row actorRow
+	result := s.db.WithContext(ctx).First(&row, "actor_key = ?", key)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return agentledger.Actor{}, false, nil
+	}
+	if result.Error != nil {
+		return agentledger.Actor{}, false, result.Error
+	}
+	return row.toModel(), true, nil
+}
+
+func (s *Store) EnsureActor(ctx context.Context, actor agentledger.Actor) (agentledger.Actor, error) {
+	stored, exists, err := s.findActorIdentity(ctx, actor)
+	if err != nil {
+		return agentledger.Actor{}, err
+	}
+	if exists {
+		return sameActorIdentity(stored, actor)
+	}
+	if err := s.CreateActor(ctx, actor); err == nil {
+		return actor, nil
+	} else if !errors.Is(err, agentledger.ErrEntityConflict) {
+		return agentledger.Actor{}, err
+	}
+	// A concurrent producer may have created the same stable key.
+	stored, exists, err = s.findActorIdentity(ctx, actor)
+	if err != nil {
+		return agentledger.Actor{}, err
+	}
+	if !exists {
+		return agentledger.Actor{}, fmt.Errorf("%w: actor %s", agentledger.ErrEntityConflict, actor.ID)
+	}
+	return sameActorIdentity(stored, actor)
+}
+
+func (s *Store) findActorIdentity(ctx context.Context, actor agentledger.Actor) (agentledger.Actor, bool, error) {
+	if actor.Key != "" {
+		return s.GetActorByKey(ctx, actor.Key)
+	}
+	return s.GetActor(ctx, actor.ID)
+}
+
+func sameActorIdentity(stored, proposed agentledger.Actor) (agentledger.Actor, error) {
+	if stored.Key != proposed.Key || stored.Type != proposed.Type || stored.Framework != proposed.Framework {
+		return agentledger.Actor{}, fmt.Errorf("%w: actor key %s", agentledger.ErrEntityConflict, proposed.Key)
+	}
+	return stored, nil
+}
+
 func (s *Store) CreateLane(ctx context.Context, lane agentledger.Lane) error {
 	if lane.LastSeq != 0 {
 		return errors.New("new lane must have last_seq 0")
@@ -252,7 +304,7 @@ func (s *Store) SaveCheckpoint(ctx context.Context, expectedRevision int64, prop
 		}
 		var latest checkpointRow
 		result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("checkpoint_key = ?", proposed.CheckpointKey).
+			Where("checkpoint_key = ?", proposed.Key).
 			Order("revision DESC").First(&latest)
 		actualRevision := int64(0)
 		if result.Error == nil {
@@ -306,7 +358,7 @@ func (s *Store) reconcileCheckpointInsert(ctx context.Context, expectedRevision 
 		}
 		return previous, nil
 	}
-	latest, ok, err := s.LoadLatestCheckpoint(ctx, proposed.CheckpointKey)
+	latest, ok, err := s.LoadLatestCheckpoint(ctx, proposed.Key)
 	if err != nil {
 		return agentledger.Checkpoint{}, fmt.Errorf("insert checkpoint: %w", insertErr)
 	}
@@ -335,11 +387,11 @@ func (s *Store) GetCheckpoint(ctx context.Context, id string) (agentledger.Check
 	return value, true, err
 }
 
-func (s *Store) LoadLatestCheckpoint(ctx context.Context, checkpointKey string) (agentledger.Checkpoint, bool, error) {
+func (s *Store) LoadLatestCheckpoint(ctx context.Context, key string) (agentledger.Checkpoint, bool, error) {
 	ctx, cancel := s.withTimeout(ctx)
 	defer cancel()
 	var row checkpointRow
-	result := s.db.WithContext(ctx).Where("checkpoint_key = ?", checkpointKey).Order("revision DESC").First(&row)
+	result := s.db.WithContext(ctx).Where("checkpoint_key = ?", key).Order("revision DESC").First(&row)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return agentledger.Checkpoint{}, false, nil
 	}
@@ -701,6 +753,7 @@ func (value *jsonMap) Scan(source any) error {
 type actorRow struct {
 	ID        string    `gorm:"column:id;type:char(36);primaryKey"`
 	Type      string    `gorm:"column:type;type:varchar(64);not null"`
+	Key       *string   `gorm:"column:actor_key;type:varchar(191);uniqueIndex:uq_ledger_actors_key"`
 	Framework *string   `gorm:"column:framework;type:varchar(191)"`
 	CreatedAt time.Time `gorm:"column:created_at;not null"`
 }
@@ -793,10 +846,10 @@ type checkpointRow struct {
 func (checkpointRow) TableName() string { return "ledger_checkpoints" }
 
 func actorToRow(value agentledger.Actor) *actorRow {
-	return &actorRow{ID: value.ID, Type: value.Type, Framework: nullable(value.Framework), CreatedAt: mustTime(value.CreatedAt)}
+	return &actorRow{ID: value.ID, Type: value.Type, Key: nullable(value.Key), Framework: nullable(value.Framework), CreatedAt: mustTime(value.CreatedAt)}
 }
 func (row actorRow) toModel() agentledger.Actor {
-	return agentledger.Actor{ID: row.ID, Type: row.Type, Framework: stringValue(row.Framework), CreatedAt: formatTime(row.CreatedAt)}
+	return agentledger.Actor{ID: row.ID, Type: row.Type, Key: stringValue(row.Key), Framework: stringValue(row.Framework), CreatedAt: formatTime(row.CreatedAt)}
 }
 func laneToRow(value agentledger.Lane) *laneRow {
 	return &laneRow{ID: value.ID, SessionID: value.SessionID, RunID: value.RunID, Name: value.Name, ParentLaneID: nullable(value.ParentLaneID), LastSeq: value.LastSeq, CreatedAt: mustTime(value.CreatedAt)}
@@ -847,7 +900,7 @@ func (row appendRow) toModel() agentledger.AppendReceipt {
 
 func checkpointToRow(value agentledger.Checkpoint) (*checkpointRow, error) {
 	row := &checkpointRow{
-		ID: value.ID, SchemaVersion: value.SchemaVersion, CheckpointKey: value.CheckpointKey,
+		ID: value.ID, SchemaVersion: value.SchemaVersion, CheckpointKey: value.Key,
 		Revision: value.Revision, ActorID: value.ActorID, Format: value.Format,
 		State: jsonMap(value.State), Extensions: jsonMap(value.Extensions), CreatedAt: mustTime(value.CreatedAt),
 	}
@@ -870,7 +923,7 @@ func checkpointToRow(value agentledger.Checkpoint) (*checkpointRow, error) {
 
 func (row checkpointRow) toModel() (agentledger.Checkpoint, error) {
 	proposed := agentledger.ProposedCheckpoint{
-		SchemaVersion: row.SchemaVersion, ID: row.ID, CheckpointKey: row.CheckpointKey,
+		SchemaVersion: row.SchemaVersion, ID: row.ID, Key: row.CheckpointKey,
 		ActorID: row.ActorID, Format: row.Format, State: map[string]any(row.State),
 		Extensions: map[string]any(row.Extensions),
 	}
@@ -894,7 +947,7 @@ func (row checkpointRow) toModel() (agentledger.Checkpoint, error) {
 }
 
 func validateCheckpoint(value agentledger.ProposedCheckpoint) error {
-	if value.SchemaVersion != "1.0" || value.ID == "" || value.CheckpointKey == "" || value.ActorID == "" || value.Format == "" {
+	if value.SchemaVersion != "1.0" || value.ID == "" || value.Key == "" || value.ActorID == "" || value.Format == "" {
 		return errors.New("checkpoint requires schema version, id, key, actor, and format")
 	}
 	if (value.State == nil) == (value.ArtifactRef == nil) {

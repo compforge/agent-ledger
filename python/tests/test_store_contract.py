@@ -65,6 +65,19 @@ async def collect(iterator: AsyncIterator[StoredEvent]) -> list[StoredEvent]:
     return [item async for item in iterator]
 
 
+async def test_actor_key_resolves_stable_identity(event_store: EventStore) -> None:
+    original = Actor(key="test/agent", type="agent", framework="test")
+    await event_store.create_actor(original)
+
+    assert await event_store.get_actor_by_key(original.key) == original
+    restarted = Actor(key=original.key, type=original.type, framework=original.framework)
+    assert await event_store.ensure_actor(restarted) == original
+    with pytest.raises(EntityConflict):
+        await event_store.ensure_actor(
+            Actor(key=original.key, type=original.type, framework="other")
+        )
+
+
 async def test_atomic_batch_sequences_and_reads(event_store: EventStore) -> None:
     target = await lane(event_store)
     first, second = event(target), event(target)

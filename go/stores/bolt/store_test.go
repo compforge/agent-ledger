@@ -58,7 +58,7 @@ func TestStorePersistsLane(t *testing.T) {
 	if err != nil || !ok || stored.LastSeq != 1 {
 		t.Fatalf("lane = %#v, %v", stored, err)
 	}
-	latest, ok, err := reopened.LoadLatestCheckpoint(ctx, checkpoint.CheckpointKey)
+	latest, ok, err := reopened.LoadLatestCheckpoint(ctx, checkpoint.Key)
 	if err != nil || !ok || latest.ID != checkpoint.ID {
 		t.Fatalf("checkpoint = %#v, %v", latest, err)
 	}
@@ -94,7 +94,7 @@ func TestCheckpointRetryAcceptsLegacyNilExtensions(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return heads.Put([]byte(legacy.CheckpointKey), []byte(legacy.ID))
+		return heads.Put([]byte(legacy.Key), []byte(legacy.ID))
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -17,6 +17,7 @@ import (
 
 var (
 	actorsBucket          = []byte("actors")
+	actorKeysBucket       = []byte("actor_keys")
 	lanesBucket           = []byte("lanes")
 	laneNamesBucket       = []byte("lane_names")
 	turnsBucket           = []byte("turns")
@@ -51,11 +52,101 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) CreateActor(ctx context.Context, actor agentledger.Actor) error {
-	return s.create(ctx, actorsBucket, actor.ID, actor, func(*bolt.Tx) error { return nil })
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		actors, err := tx.CreateBucketIfNotExists(actorsBucket)
+		if err != nil {
+			return err
+		}
+		keys, err := tx.CreateBucketIfNotExists(actorKeysBucket)
+		if err != nil {
+			return err
+		}
+		if actors.Get([]byte(actor.ID)) != nil || actor.Key != "" && keys.Get([]byte(actor.Key)) != nil {
+			return fmt.Errorf("%w: actor %s", agentledger.ErrEntityConflict, actor.ID)
+		}
+		if err := putJSON(actors, actor.ID, actor); err != nil {
+			return err
+		}
+		if actor.Key != "" {
+			return keys.Put([]byte(actor.Key), []byte(actor.ID))
+		}
+		return nil
+	})
 }
 
 func (s *Store) GetActor(ctx context.Context, id string) (agentledger.Actor, bool, error) {
 	return get[agentledger.Actor](ctx, s.db, actorsBucket, id)
+}
+
+func (s *Store) GetActorByKey(ctx context.Context, key string) (agentledger.Actor, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return agentledger.Actor{}, false, err
+	}
+	var actor agentledger.Actor
+	var found bool
+	err := s.db.View(func(tx *bolt.Tx) error {
+		keys := tx.Bucket(actorKeysBucket)
+		if keys == nil {
+			return nil
+		}
+		id := keys.Get([]byte(key))
+		if id == nil {
+			return nil
+		}
+		var err error
+		actor, found, err = bucketGet[agentledger.Actor](tx.Bucket(actorsBucket), string(id))
+		return err
+	})
+	return actor, found, err
+}
+
+func (s *Store) EnsureActor(ctx context.Context, actor agentledger.Actor) (agentledger.Actor, error) {
+	var stored agentledger.Actor
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		actors, err := tx.CreateBucketIfNotExists(actorsBucket)
+		if err != nil {
+			return err
+		}
+		keys, err := tx.CreateBucketIfNotExists(actorKeysBucket)
+		if err != nil {
+			return err
+		}
+		lookupID := actor.ID
+		if actor.Key != "" {
+			if id := keys.Get([]byte(actor.Key)); id != nil {
+				lookupID = string(id)
+			}
+		}
+		if existing, ok, getErr := bucketGet[agentledger.Actor](actors, lookupID); getErr != nil {
+			return getErr
+		} else if ok {
+			if existing.Key != actor.Key || existing.Type != actor.Type || existing.Framework != actor.Framework {
+				return fmt.Errorf("%w: actor key %s", agentledger.ErrEntityConflict, actor.Key)
+			}
+			stored = existing
+			return nil
+		}
+		if actors.Get([]byte(actor.ID)) != nil {
+			return fmt.Errorf("%w: actor %s", agentledger.ErrEntityConflict, actor.ID)
+		}
+		if err := putJSON(actors, actor.ID, actor); err != nil {
+			return err
+		}
+		if actor.Key != "" {
+			if err := keys.Put([]byte(actor.Key), []byte(actor.ID)); err != nil {
+				return err
+			}
+		}
+		stored = actor
+		return nil
+	})
+	return stored, err
 }
 
 func (s *Store) CreateLane(ctx context.Context, lane agentledger.Lane) error {
@@ -245,7 +336,7 @@ func (s *Store) SaveCheckpoint(ctx context.Context, expectedRevision int64, prop
 			return fmt.Errorf("%w: actor %s", agentledger.ErrEntityNotFound, proposed.ActorID)
 		}
 		actualRevision := int64(0)
-		if latestID := heads.Get([]byte(proposed.CheckpointKey)); latestID != nil {
+		if latestID := heads.Get([]byte(proposed.Key)); latestID != nil {
 			latest, ok, err := bucketGet[agentledger.Checkpoint](checkpoints, string(latestID))
 			if err != nil {
 				return err
@@ -271,7 +362,7 @@ func (s *Store) SaveCheckpoint(ctx context.Context, expectedRevision int64, prop
 		if err := putJSON(checkpoints, stored.ID, stored); err != nil {
 			return err
 		}
-		return heads.Put([]byte(stored.CheckpointKey), []byte(stored.ID))
+		return heads.Put([]byte(stored.Key), []byte(stored.ID))
 	})
 	return stored, err
 }
@@ -280,7 +371,7 @@ func (s *Store) GetCheckpoint(ctx context.Context, id string) (agentledger.Check
 	return get[agentledger.Checkpoint](ctx, s.db, checkpointsBucket, id)
 }
 
-func (s *Store) LoadLatestCheckpoint(ctx context.Context, checkpointKey string) (agentledger.Checkpoint, bool, error) {
+func (s *Store) LoadLatestCheckpoint(ctx context.Context, key string) (agentledger.Checkpoint, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return agentledger.Checkpoint{}, false, err
 	}
@@ -291,7 +382,7 @@ func (s *Store) LoadLatestCheckpoint(ctx context.Context, checkpointKey string) 
 		if heads == nil {
 			return nil
 		}
-		id := heads.Get([]byte(checkpointKey))
+		id := heads.Get([]byte(key))
 		if id == nil {
 			return nil
 		}
@@ -721,7 +812,7 @@ func clone[T any](value T) (T, error) {
 }
 
 func validateCheckpoint(value agentledger.ProposedCheckpoint) error {
-	if value.SchemaVersion != "1.0" || value.ID == "" || value.CheckpointKey == "" || value.ActorID == "" || value.Format == "" {
+	if value.SchemaVersion != "1.0" || value.ID == "" || value.Key == "" || value.ActorID == "" || value.Format == "" {
 		return errors.New("checkpoint requires schema version, id, key, actor, and format")
 	}
 	if (value.State == nil) == (value.ArtifactRef == nil) {

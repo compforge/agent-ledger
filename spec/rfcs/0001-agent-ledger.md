@@ -61,8 +61,10 @@ to one Lane, an Action belongs to one Turn, and an Attempt belongs to one Action
 and `parent_action_id` express optional structural relationships without changing ownership.
 
 Entity tables describe identity and containment, not lifecycle status. Actor rows hold stable
-`type` and optional `framework` attributes so the high-volume Event table only repeats `actor_id`.
-Actor attributes are immutable; a semantic change creates a new Actor. Started, completed, failed,
+`type`, optional `framework`, and an optional upstream `key` so the high-volume Event table only
+repeats `actor_id`. A non-empty Actor key is unique within one Store and lets a producer recover the
+same Ledger-owned Actor ID after process replacement. Actor attributes are immutable; reusing a key
+with different attributes is a conflict, and a semantic change creates a new Actor. Started, completed, failed,
 cancelled, checkpointed, and reconciled are immutable Events. `Lane.last_seq` protects Event append
 ordering. Checkpoint revisions are immutable; a backend may maintain a mutable latest pointer as an
 index over them.
@@ -93,7 +95,8 @@ for every subject kind. Valid ownership means:
 
 `actor_id` references the Actor that performed or initiated the recorded action. It does not
 identify the adapter that wrote the Event. The referenced Actor carries an extensible `type` and
-optional `framework`; recommended types include `user`, `agent`, `orchestrator`, `harness`, `model`,
+optional `framework`; its optional `key` is the upstream producer's stable, namespaced identity,
+not a display name. Recommended types include `user`, `agent`, `orchestrator`, `harness`, `model`,
 `tool`, and `system`. Adapter-specific recording details belong in `extensions`.
 
 `causation_id` optionally references the Event that caused the current fact. It is a logical Event
