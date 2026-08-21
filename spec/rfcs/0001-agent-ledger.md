@@ -69,6 +69,13 @@ cancelled, checkpointed, and reconciled are immutable Events. `Lane.last_seq` pr
 ordering. Checkpoint revisions are immutable; a backend may maintain a mutable latest pointer as an
 index over them.
 
+Public `key` fields are caller-owned lookup identities. `Actor.key` and `Checkpoint.key` are opaque
+strings to Ledger: Ledger stores and compares the complete value but does not derive, parse,
+normalize, or assign business meaning to it. A caller may use a namespaced composite value such as
+`system:tenant:agent:version` to preserve every dimension it needs for later lookup; the delimiter
+and individual segments remain entirely caller-defined. `Actor.key` resolves one stable Actor,
+while `Checkpoint.key` groups revisions of one caller-defined recoverable instance.
+
 SQL schemas intentionally omit foreign-key constraints. Stores MUST validate logical ownership on
 writes. This keeps migration, archival, partitioning, and cross-database operation independent from
 database-specific foreign-key behavior.
