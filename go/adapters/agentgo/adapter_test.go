@@ -61,7 +61,87 @@ func TestToolMiddlewareRecordsActionAndAttempt(t *testing.T) {
 	if len(view.Turns) != 1 || len(view.Actions) != 1 || view.Actions[0].Type != "tool_call" || len(view.Attempts) != 1 {
 		t.Fatalf("session view = %#v", view)
 	}
+	if view.Actions[0].Effect != agentledger.UnknownEffect() {
+		t.Fatalf("tool effect = %#v", view.Actions[0].Effect)
+	}
 	assertAttemptLifecycle(t, view.Events)
+}
+
+func TestToolMiddlewareRetriesOnlyWhenPolicyApprovesFixedEffect(t *testing.T) {
+	ctx := context.Background()
+	store := agentledger.NewMemoryEventStore()
+	readEffect := agentledger.Effect{Kind: agentledger.EffectKindRead, Idempotency: agentledger.IdempotencyNotApplicable}
+	adapter, err := New(ctx, Config{
+		Store: store, SessionID: "session", RunID: "run", NativeSessionID: "native",
+		Actor: agentledger.NewActor("agent", "agentgo"), OperationTimeout: time.Second,
+		ToolEffect: func(agentgo.ToolCall) agentledger.Effect { return readEffect },
+		CanRetryTool: func(action agentledger.Action, attempt agentledger.Attempt, call agentgo.ToolCall) ToolRetryDecision {
+			return ToolRetryDecision{
+				Approved: action.Effect == readEffect && attempt.AttemptNo == 1 && call.ID == "tool-1",
+				Metadata: map[string]any{"recovery_decision_id": "confirmation-1"},
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := agentgo.ToolCall{ID: "tool-1", Name: "read", Args: json.RawMessage(`{"path":"README.md"}`)}
+	turnID, err := adapter.turnID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.beforeToolCall(ctx, turnID, call, map[string]any{"tool_call_id": call.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.ToolMiddleware()(ctx, call, func(context.Context, json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"ok":true}`), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	view, err := store.LoadSession(ctx, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Actions) != 1 || len(view.Attempts) != 2 || view.Attempts[1].AttemptNo != 2 {
+		t.Fatalf("actions=%#v attempts=%#v", view.Actions, view.Attempts)
+	}
+	if view.Actions[0].Effect != readEffect {
+		t.Fatalf("effect = %#v, want %#v", view.Actions[0].Effect, readEffect)
+	}
+	var oldFailed, retryRequested bool
+	for _, event := range view.Events {
+		switch {
+		case event.EventType == agentledger.EventTypeAttemptFailed && event.SubjectID == view.Attempts[0].ID:
+			oldFailed = event.Payload["superseded_by_attempt_id"] == view.Attempts[1].ID
+		case event.EventType == agentledger.EventTypeAttemptRequested && event.SubjectID == view.Attempts[1].ID:
+			retryRequested = event.Payload["recovery_decision_id"] == "confirmation-1"
+		}
+	}
+	if !oldFailed || !retryRequested {
+		t.Fatalf("old_failed=%t retry_requested=%t events=%#v", oldFailed, retryRequested, view.Events)
+	}
+}
+
+func TestToolMiddlewareDoesNotRetryUnresolvedActionByDefault(t *testing.T) {
+	ctx := context.Background()
+	store := agentledger.NewMemoryEventStore()
+	adapter := newTestAdapter(t, ctx, store)
+	call := agentgo.ToolCall{ID: "tool-1", Name: "write", Args: json.RawMessage(`{}`)}
+	turnID, err := adapter.turnID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.beforeToolCall(ctx, turnID, call, map[string]any{"tool_call_id": call.ID}); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	_, err = adapter.ToolMiddleware()(ctx, call, func(context.Context, json.RawMessage) (json.RawMessage, error) {
+		called = true
+		return nil, nil
+	})
+	if err == nil || called {
+		t.Fatalf("err=%v called=%t", err, called)
+	}
 }
 
 func TestWrappedModelRecordsPhysicalAttempt(t *testing.T) {
@@ -77,6 +157,10 @@ func TestWrappedModelRecordsPhysicalAttempt(t *testing.T) {
 	}
 	if len(view.Actions) != 1 || view.Actions[0].Type != "model_call" || len(view.Attempts) != 1 {
 		t.Fatalf("session view = %#v", view)
+	}
+	wantEffect := agentledger.Effect{Kind: agentledger.EffectKindNone, Idempotency: agentledger.IdempotencyNotApplicable}
+	if view.Actions[0].Effect != wantEffect {
+		t.Fatalf("model effect = %#v, want %#v", view.Actions[0].Effect, wantEffect)
 	}
 	assertAttemptLifecycle(t, view.Events)
 }

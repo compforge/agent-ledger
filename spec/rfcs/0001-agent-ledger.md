@@ -133,6 +133,14 @@ Core Action types are:
 | `compact` | A Harness context compaction. |
 | `checkpoint` | A Harness checkpoint operation; the durable result is a separate Checkpoint object. |
 
+Every Action has an immutable `Effect` fixed before execution:
+
+- `kind` is `none`, `read`, `write`, or `unknown`;
+- `idempotency` is `not_applicable`, `inherent`, `keyed`, `none`, or `unknown`.
+
+`unknown` preserves uncertainty rather than guessing. Ledger stores these facts but does not decide
+whether a caller retries an Action. Extension Action types use the same Core Effect vocabulary.
+
 Core lifecycle Event types are `session.started/completed`, `run.started/completed/failed/cancelled`,
 `lane.created`, `turn.started/completed/failed`, `action.started/completed/failed`, and
 `attempt.requested/completed/failed`. The standard framework-state Events are
@@ -183,13 +191,14 @@ order.
 
 ## Write-before-execute
 
-For a model or tool Action, an adapter creates an Attempt and durably appends
-`attempt.requested` before invoking the external operation. It appends `attempt.completed` or
-`attempt.failed` before the harness advances.
+For a model or tool Action, an adapter first fixes the Action Effect, then creates an Attempt and
+durably appends `attempt.requested` before invoking the external operation. It appends
+`attempt.completed` or `attempt.failed` before the harness advances.
 
 A requested Attempt without a terminal Event is unresolved after a crash. Recovery may query the
 provider, apply a known completed result, abandon the old Attempt and create the next `attempt_no`,
-or ask for human resolution. A side-effecting tool MUST NOT be silently retried.
+or ask for human resolution. An unresolved `write` without known idempotency, or any `unknown`
+Effect, MUST NOT be silently retried.
 
 ## Framework recovery
 

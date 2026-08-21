@@ -785,6 +785,8 @@ type actionRow struct {
 	TurnID         string    `gorm:"column:turn_id;type:char(36);not null;index:ix_ledger_actions_turn"`
 	Type           string    `gorm:"column:type;type:varchar(191);not null"`
 	ParentActionID *string   `gorm:"column:parent_action_id;type:char(36);index:ix_ledger_actions_parent"`
+	EffectKind     string    `gorm:"column:effect_kind;type:varchar(32);not null;default:unknown"`
+	Idempotency    string    `gorm:"column:effect_idempotency;type:varchar(32);not null;default:unknown"`
 	CreatedAt      time.Time `gorm:"column:created_at;not null"`
 }
 
@@ -864,10 +866,18 @@ func (row turnRow) toModel() agentledger.Turn {
 	return agentledger.Turn{ID: row.ID, LaneID: row.LaneID, CreatedAt: formatTime(row.CreatedAt)}
 }
 func actionToRow(value agentledger.Action) *actionRow {
-	return &actionRow{ID: value.ID, TurnID: value.TurnID, Type: value.Type, ParentActionID: nullable(value.ParentActionID), CreatedAt: mustTime(value.CreatedAt)}
+	effect := agentledger.NormalizeEffect(value.Effect)
+	return &actionRow{
+		ID: value.ID, TurnID: value.TurnID, Type: value.Type, ParentActionID: nullable(value.ParentActionID),
+		EffectKind: string(effect.Kind), Idempotency: string(effect.Idempotency), CreatedAt: mustTime(value.CreatedAt),
+	}
 }
 func (row actionRow) toModel() agentledger.Action {
-	return agentledger.Action{ID: row.ID, TurnID: row.TurnID, Type: row.Type, ParentActionID: stringValue(row.ParentActionID), CreatedAt: formatTime(row.CreatedAt)}
+	return agentledger.Action{
+		ID: row.ID, TurnID: row.TurnID, Type: row.Type, ParentActionID: stringValue(row.ParentActionID),
+		Effect:    agentledger.NormalizeEffect(agentledger.Effect{Kind: agentledger.EffectKind(row.EffectKind), Idempotency: agentledger.Idempotency(row.Idempotency)}),
+		CreatedAt: formatTime(row.CreatedAt),
+	}
 }
 func attemptToRow(value agentledger.Attempt) *attemptRow {
 	return &attemptRow{ID: value.ID, ActionID: value.ActionID, AttemptNo: value.AttemptNo, CreatedAt: mustTime(value.CreatedAt)}

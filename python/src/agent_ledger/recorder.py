@@ -13,7 +13,10 @@ from agent_ledger.models import (
     Actor,
     AppendReceipt,
     Attempt,
+    Effect,
+    EffectKind,
     EventType,
+    Idempotency,
     Lane,
     ProposedEvent,
     StoredEvent,
@@ -224,15 +227,26 @@ class LaneRecorder:
         *,
         payload: dict[str, Any],
     ) -> AttemptHandle:
-        return await self._before_call(ActionType.MODEL_CALL, _entity_id(turn), payload)
+        return await self._before_call(
+            ActionType.MODEL_CALL,
+            _entity_id(turn),
+            payload,
+            effect=Effect(kind=EffectKind.NONE, idempotency=Idempotency.NOT_APPLICABLE),
+        )
 
     async def before_tool_call(
         self,
         turn: Turn | str,
         *,
         payload: dict[str, Any],
+        effect: Effect | None = None,
     ) -> AttemptHandle:
-        return await self._before_call(ActionType.TOOL_CALL, _entity_id(turn), payload)
+        return await self._before_call(
+            ActionType.TOOL_CALL,
+            _entity_id(turn),
+            payload,
+            effect=effect or Effect(),
+        )
 
     async def retry(
         self,
@@ -421,10 +435,11 @@ class LaneRecorder:
         payload: dict[str, Any],
         *,
         action: Action | None = None,
+        effect: Effect | None = None,
         attempt_no: int = 1,
     ) -> AttemptHandle:
         if action is None:
-            action = Action(turn_id=turn_id, type=action_type)
+            action = Action(turn_id=turn_id, type=action_type, effect=effect or Effect())
             await self.store.create_action(action)
         attempt = Attempt(action_id=action.id, attempt_no=attempt_no)
         await self.store.create_attempt(attempt)

@@ -40,7 +40,8 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
    Ledger 不创建权威 Session/Run 行，也不规定 Run 的业务来源和生命周期。
 2. Run 是 Session 与 Lane 之间的稳定聚合边界；Lane 是 Run 内的串行链路，也是 OCC 与 `seq` 的
    边界。一个 Run 可有 main、分支和 framework-native Lanes；跨 Lane 顺序只用于观察。
-3. Turn 是稳定交互边界；Action 是 `model_call`、`tool_call`、`compact` 等逻辑动作；Attempt
+3. Turn 是稳定交互边界；Action 是 `model_call`、`tool_call`、`compact` 等逻辑动作，并在执行前固化
+   `Effect(kind, idempotency)`；Attempt
    是一次物理尝试。重试沿用 Action，并递增 `attempt_no`。Core vocabulary 提供跨语言常量，但
    type 字段保持开放；扩展使用 namespaced value。
 4. Actor、Lane、Turn、Action、Attempt、Event 和 append ID 使用 UUIDv7。业务表只表达不可变身份

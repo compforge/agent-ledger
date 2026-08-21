@@ -38,6 +38,9 @@ from agent_ledger.models import (
     Attempt,
     Checkpoint,
     CheckpointAnchor,
+    Effect,
+    EffectKind,
+    Idempotency,
     Lane,
     ProposedCheckpoint,
     ProposedEvent,
@@ -105,6 +108,8 @@ class _Action(_Base):
     turn_id: Mapped[str] = mapped_column(String(36), nullable=False)
     type: Mapped[str] = mapped_column(String(_ID_LENGTH), nullable=False)
     parent_action_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    effect_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    effect_idempotency: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -765,7 +770,12 @@ def _turn_row(value: Turn) -> _Turn:
 
 
 def _action_row(value: Action) -> _Action:
-    return _Action(**value.model_dump())
+    data = value.model_dump(exclude={"effect"})
+    return _Action(
+        **data,
+        effect_kind=value.effect.kind.value,
+        effect_idempotency=value.effect.idempotency.value,
+    )
 
 
 def _attempt_row(value: Attempt) -> _Attempt:
@@ -838,6 +848,10 @@ def _action_model(row: _Action) -> Action:
         turn_id=row.turn_id,
         type=row.type,
         parent_action_id=row.parent_action_id,
+        effect=Effect(
+            kind=EffectKind(row.effect_kind),
+            idempotency=Idempotency(row.effect_idempotency),
+        ),
         created_at=_aware(row.created_at),
     )
 

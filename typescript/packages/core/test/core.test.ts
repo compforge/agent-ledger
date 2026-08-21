@@ -7,7 +7,9 @@ import {
   ActionType,
   canonicalAppendDigest,
   CheckpointConflict,
+  EffectKind,
   EventType,
+  Idempotency,
   inspectRun,
   LaneConflict,
   LaneRecorder,
@@ -38,9 +40,11 @@ test("actor key resolves stable producer identity", async () => {
 test("core vocabulary matches the cross-language registry", async () => {
   const vocabulary = JSON.parse(
     await readFile(resolve(process.cwd(), "../spec/vocabulary.json"), "utf8"),
-  ) as { action_types: string[]; event_types: string[] };
+  ) as { action_types: string[]; effect_kinds: string[]; idempotency: string[]; event_types: string[] };
 
   assert.deepEqual(Object.values(ActionType), vocabulary.action_types);
+  assert.deepEqual(Object.values(EffectKind), vocabulary.effect_kinds);
+  assert.deepEqual(Object.values(Idempotency), vocabulary.idempotency);
   assert.deepEqual(Object.values(EventType), vocabulary.event_types);
 });
 
