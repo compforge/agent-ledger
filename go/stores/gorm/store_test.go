@@ -87,6 +87,45 @@ func TestSQLiteStorePersistsExecutionModel(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreLoadsBoundedLanePage(t *testing.T) {
+	store, ctx, lane, actor := newPageTestStore(t)
+	for index, eventType := range []string{"lane.started", "lane.recorded", "lane.completed"} {
+		event := agentledger.NewEvent(eventType, lane.ID, lane.ID, actor)
+		if _, err := store.Append(ctx, lane.ID, int64(index), agentledger.NewID(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := store.LoadLanePage(ctx, lane.ID, 0, 2)
+	if err != nil || len(page.Events) != 2 || !page.HasMore || page.Events[1].Seq != 2 {
+		t.Fatalf("page = %#v, %v", page, err)
+	}
+}
+
+func newPageTestStore(t *testing.T) (*Store, context.Context, agentledger.Lane, agentledger.Actor) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(memoryDSN()), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(db, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	actor := agentledger.NewActor("agent", "agentgo")
+	lane := agentledger.NewLane("session-page", "run", "main", "")
+	if err := store.CreateActor(ctx, actor); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateLane(ctx, lane); err != nil {
+		t.Fatal(err)
+	}
+	return store, ctx, lane, actor
+}
+
 func TestCheckpointInsertFailureIsNotARevisionConflict(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(memoryDSN()), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),

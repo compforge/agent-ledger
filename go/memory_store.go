@@ -540,6 +540,44 @@ func (s *MemoryEventStore) LoadLane(ctx context.Context, laneID string, afterSeq
 	}
 }
 
+func (s *MemoryEventStore) LoadLanePage(ctx context.Context, laneID string, afterSeq int64, limit int) (EventPage, error) {
+	if afterSeq < 0 {
+		return EventPage{}, errors.New("after_seq must be non-negative")
+	}
+	if limit < 1 {
+		return EventPage{}, errors.New("limit must be positive")
+	}
+	if err := ctx.Err(); err != nil {
+		return EventPage{}, err
+	}
+
+	s.mu.Lock()
+	_, exists := s.lanes[laneID]
+	items := make([]StoredEvent, 0, limit+1)
+	for _, event := range s.laneEvents[laneID] {
+		if event.Seq > afterSeq {
+			items = append(items, event)
+			if len(items) == limit+1 {
+				break
+			}
+		}
+	}
+	s.mu.Unlock()
+	if !exists {
+		return EventPage{}, fmt.Errorf("%w: lane %s", ErrEntityNotFound, laneID)
+	}
+	events, err := clone(items)
+	if err != nil {
+		return EventPage{}, err
+	}
+	page := EventPage{Events: events}
+	if len(page.Events) > limit {
+		page.Events = page.Events[:limit]
+		page.HasMore = true
+	}
+	return page, nil
+}
+
 func (s *MemoryEventStore) LoadSession(ctx context.Context, sessionID string) (SessionView, error) {
 	if err := ctx.Err(); err != nil {
 		return SessionView{}, err
