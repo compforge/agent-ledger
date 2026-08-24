@@ -68,6 +68,33 @@ func TestStorePersistsLane(t *testing.T) {
 	}
 }
 
+func TestStoreLoadsBoundedLanePage(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "ledger.db"), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	actor := agentledger.NewActor("agent", "agentgo")
+	lane := agentledger.NewLane("session-page", "run", "main", "")
+	if err := store.CreateActor(ctx, actor); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateLane(ctx, lane); err != nil {
+		t.Fatal(err)
+	}
+	for index, eventType := range []string{"lane.started", "lane.recorded", "lane.completed"} {
+		event := agentledger.NewEvent(eventType, lane.ID, lane.ID, actor)
+		if _, err := store.Append(ctx, lane.ID, int64(index), agentledger.NewID(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := store.LoadLanePage(ctx, lane.ID, 0, 2)
+	if err != nil || len(page.Events) != 2 || !page.HasMore || page.Events[1].Seq != 2 {
+		t.Fatalf("page = %#v, %v", page, err)
+	}
+}
+
 func TestCheckpointRetryAcceptsLegacyNilExtensions(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "ledger.db"), time.Second)
 	if err != nil {

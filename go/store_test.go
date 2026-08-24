@@ -11,6 +11,34 @@ func TestMemoryStoreExecutionHierarchyAndAppend(t *testing.T) {
 	testStoreContract(t, NewMemoryEventStore())
 }
 
+func TestMemoryStoreLoadsBoundedLanePage(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryEventStore()
+	actor := NewActor("agent", "")
+	lane := NewLane("session", "run", "main", "")
+	if err := store.CreateActor(ctx, actor); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateLane(ctx, lane); err != nil {
+		t.Fatal(err)
+	}
+	for index, eventType := range []string{"lane.started", "lane.recorded", "lane.completed"} {
+		event := NewEvent(eventType, lane.ID, lane.ID, actor)
+		if _, err := store.Append(ctx, lane.ID, int64(index), NewID(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first, err := store.LoadLanePage(ctx, lane.ID, 0, 2)
+	if err != nil || len(first.Events) != 2 || !first.HasMore || first.Events[1].Seq != 2 {
+		t.Fatalf("first page = %#v, %v", first, err)
+	}
+	second, err := store.LoadLanePage(ctx, lane.ID, first.Events[1].Seq, 2)
+	if err != nil || len(second.Events) != 1 || second.HasMore || second.Events[0].Seq != 3 {
+		t.Fatalf("second page = %#v, %v", second, err)
+	}
+}
+
 func testStoreContract(t *testing.T, store EventStore) {
 	t.Helper()
 	ctx := context.Background()

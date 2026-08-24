@@ -684,6 +684,53 @@ func (s *Store) LoadLane(ctx context.Context, laneID string, afterSeq int64) ite
 	}
 }
 
+func (s *Store) LoadLanePage(ctx context.Context, laneID string, afterSeq int64, limit int) (agentledger.EventPage, error) {
+	if afterSeq < 0 {
+		return agentledger.EventPage{}, errors.New("after_seq must be non-negative")
+	}
+	if limit < 1 {
+		return agentledger.EventPage{}, errors.New("limit must be positive")
+	}
+	if err := ctx.Err(); err != nil {
+		return agentledger.EventPage{}, err
+	}
+	page := agentledger.EventPage{Events: make([]agentledger.StoredEvent, 0, limit)}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		if !bucketHas(tx.Bucket(lanesBucket), laneID) {
+			return fmt.Errorf("%w: lane %s", agentledger.ErrEntityNotFound, laneID)
+		}
+		root := tx.Bucket(laneEventsBucket)
+		if root == nil {
+			return nil
+		}
+		index := root.Bucket([]byte(laneID))
+		if index == nil {
+			return nil
+		}
+		events := tx.Bucket(eventsBucket)
+		cursor := index.Cursor()
+		for key, id := cursor.Seek(sequenceKey(uint64(afterSeq + 1))); key != nil; key, id = cursor.Next() {
+			if len(page.Events) == limit {
+				page.HasMore = true
+				break
+			}
+			item, ok, err := bucketGet[agentledger.StoredEvent](events, string(id))
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errors.New("lane index points to missing event")
+			}
+			page.Events = append(page.Events, item)
+		}
+		return nil
+	})
+	if err != nil {
+		return agentledger.EventPage{}, err
+	}
+	return page, nil
+}
+
 func (s *Store) LoadSession(ctx context.Context, sessionID string) (agentledger.SessionView, error) {
 	if err := ctx.Err(); err != nil {
 		return agentledger.SessionView{}, err

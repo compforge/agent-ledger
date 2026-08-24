@@ -582,6 +582,45 @@ func (s *Store) LoadLane(ctx context.Context, laneID string, afterSeq int64) ite
 	}
 }
 
+func (s *Store) LoadLanePage(ctx context.Context, laneID string, afterSeq int64, limit int) (agentledger.EventPage, error) {
+	if afterSeq < 0 {
+		return agentledger.EventPage{}, errors.New("after_seq must be non-negative")
+	}
+	if limit < 1 {
+		return agentledger.EventPage{}, errors.New("limit must be positive")
+	}
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+	var count int64
+	if err := s.db.WithContext(ctx).Model(&laneRow{}).Where("id = ?", laneID).Count(&count).Error; err != nil {
+		return agentledger.EventPage{}, err
+	}
+	if count == 0 {
+		return agentledger.EventPage{}, fmt.Errorf("%w: lane %s", agentledger.ErrEntityNotFound, laneID)
+	}
+	var rows []eventRow
+	if err := s.db.WithContext(ctx).
+		Where("lane_id = ? AND seq > ?", laneID, afterSeq).
+		Order("seq").
+		Limit(limit + 1).
+		Find(&rows).Error; err != nil {
+		return agentledger.EventPage{}, err
+	}
+	page := agentledger.EventPage{Events: make([]agentledger.StoredEvent, 0, min(len(rows), limit))}
+	if len(rows) > limit {
+		rows = rows[:limit]
+		page.HasMore = true
+	}
+	for _, row := range rows {
+		event, err := row.toModel()
+		if err != nil {
+			return agentledger.EventPage{}, err
+		}
+		page.Events = append(page.Events, event)
+	}
+	return page, nil
+}
+
 func (s *Store) LoadSession(ctx context.Context, sessionID string) (agentledger.SessionView, error) {
 	view, err := s.loadView(ctx, sessionID, nil)
 	return agentledger.SessionView{

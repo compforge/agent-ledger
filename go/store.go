@@ -33,8 +33,15 @@ type EventStore interface {
 	GetAttempt(context.Context, string) (Attempt, bool, error)
 	Append(context.Context, string, int64, string, ...ProposedEvent) (AppendReceipt, error)
 	LoadLane(context.Context, string, int64) iter.Seq2[StoredEvent, error]
+	LoadLanePage(context.Context, string, int64, int) (EventPage, error)
 	LoadSession(context.Context, string) (SessionView, error)
 	LoadRun(context.Context, string, string) (RunView, error)
+}
+
+// EventPage is a bounded slice of one Lane's append-only sequence.
+type EventPage struct {
+	Events  []StoredEvent
+	HasMore bool
 }
 
 type CheckpointStore interface {
