@@ -172,7 +172,14 @@ test("recorder gives retries a new attempt under the same action", async () => {
   });
   const turn = await recorder.startTurn();
   const first = await recorder.beforeModelCall(turn.id, { model: { id: "test" }, input: [] });
-  await recorder.modelFailed(first, new Error("timeout"));
+  const failed = await recorder.modelFailed(first, new Error("timeout"), {
+    usage: { input_tokens: 8 }, provider_request_id: "request-1",
+  });
+  assert.deepEqual(failed.payload, {
+    error: { type: "Error", message: "timeout" },
+    usage: { input_tokens: 8 },
+    provider_request_id: "request-1",
+  });
   const second = await recorder.retry(first.action_id, 2, { model: { id: "test" }, input: [] });
   assert.equal(second.action_id, first.action_id);
   assert.notEqual(second.attempt_id, first.attempt_id);

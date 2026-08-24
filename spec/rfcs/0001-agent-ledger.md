@@ -249,6 +249,9 @@ outcome; it does not grant permission to later retries.
 All Core failure payloads use `error {type, message, code?, retryable?}`. `type` is a stable
 machine-oriented classification; `message` is the human-readable diagnostic. `retryable` reports
 an observed provider or tool property and is not a recovery decision.
+Recorder failure operations accept the observed terminal payload separately from the error and
+merge both into one `attempt.failed` Event. This preserves partial usage and provider/external
+operation identifiers even when the call itself returns an error.
 
 ### Attempt terminal outcomes
 

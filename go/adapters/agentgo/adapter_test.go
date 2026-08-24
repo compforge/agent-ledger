@@ -266,6 +266,32 @@ func TestWrappedModelRecordsPhysicalAttempt(t *testing.T) {
 	assertAttemptLifecycle(t, view.Events)
 }
 
+func TestWrappedModelPreservesObservedUsageOnFailure(t *testing.T) {
+	ctx := context.Background()
+	store := agentledger.NewMemoryEventStore()
+	adapter := newTestAdapter(t, ctx, store)
+	if _, err := adapter.WrapModel(partiallyFailingModel{}).Generate(
+		ctx, []agentgo.Message{agentgo.UserMsg("hello")}, nil,
+	); err == nil {
+		t.Fatal("generate succeeded")
+	}
+	view, err := store.LoadSession(ctx, "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range view.Events {
+		if event.EventType != agentledger.EventTypeAttemptFailed {
+			continue
+		}
+		usage, _ := event.Payload["usage"].(map[string]any)
+		if usage["input_tokens"] != float64(6) || event.Payload["error"] == nil {
+			t.Fatalf("model failure payload = %#v", event.Payload)
+		}
+		return
+	}
+	t.Fatal("missing failed model Attempt")
+}
+
 func assertAttemptLifecycle(t *testing.T, events []agentledger.StoredEvent) {
 	t.Helper()
 	var types []string
@@ -309,6 +335,14 @@ func (fakeModel) GenerateStream(context.Context, []agentgo.Message, []agentgo.To
 func (fakeModel) SupportsTools() bool  { return true }
 func (fakeModel) ProviderName() string { return "test-provider" }
 func (fakeModel) ModelName() string    { return "test-model" }
+
+type partiallyFailingModel struct{ fakeModel }
+
+func (partiallyFailingModel) Generate(context.Context, []agentgo.Message, []agentgo.ToolSpec, ...agentgo.CallOption) (*agentgo.LLMResponse, error) {
+	return &agentgo.LLMResponse{Message: agentgo.Message{Usage: &agentgo.Usage{
+		Provider: "actual-provider", Model: "actual-model", Input: 6,
+	}}}, errors.New("provider failed after reporting usage")
+}
 
 type countingModel struct{ called bool }
 
