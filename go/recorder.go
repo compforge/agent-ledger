@@ -130,7 +130,7 @@ func (r *LaneRecorder) CompleteRun(ctx context.Context, payload map[string]any) 
 }
 
 func (r *LaneRecorder) FailRun(ctx context.Context, failure error) (StoredEvent, error) {
-	return r.Record(ctx, EventTypeRunFailed, r.lane.RunID, errorPayload(failure), "")
+	return r.Record(ctx, EventTypeRunFailed, r.lane.RunID, errorPayload(failure, nil), "")
 }
 
 func (r *LaneRecorder) StartTurn(ctx context.Context, payload map[string]any) (Turn, error) {
@@ -149,7 +149,7 @@ func (r *LaneRecorder) CompleteTurn(ctx context.Context, turnID string, payload 
 }
 
 func (r *LaneRecorder) FailTurn(ctx context.Context, turnID string, failure error) (StoredEvent, error) {
-	return r.Record(ctx, EventTypeTurnFailed, turnID, errorPayload(failure), "")
+	return r.Record(ctx, EventTypeTurnFailed, turnID, errorPayload(failure, nil), "")
 }
 
 func (r *LaneRecorder) BeforeModelCall(ctx context.Context, turnID string, payload map[string]any) (AttemptHandle, error) {
@@ -183,36 +183,32 @@ func (r *LaneRecorder) Retry(ctx context.Context, actionID string, attemptNo int
 	return r.beforeCall(ctx, action.Type, action.TurnID, action.Key, payload, action, action.Effect, attemptNo)
 }
 
-func (r *LaneRecorder) ModelCompleted(ctx context.Context, attempt AttemptHandle, payload map[string]any) error {
+func (r *LaneRecorder) ModelCompleted(ctx context.Context, attempt AttemptHandle, payload map[string]any) (StoredEvent, error) {
 	if attempt.ActionType != ActionTypeModelCall {
-		return errors.New("attempt is not a model_call")
+		return StoredEvent{}, errors.New("attempt is not a model_call")
 	}
-	_, err := r.attemptCompleted(ctx, attempt, payload)
-	return err
+	return r.attemptCompleted(ctx, attempt, payload)
 }
 
-func (r *LaneRecorder) ModelFailed(ctx context.Context, attempt AttemptHandle, failure error) error {
+func (r *LaneRecorder) ModelFailed(ctx context.Context, attempt AttemptHandle, failure error, payload map[string]any) (StoredEvent, error) {
 	if attempt.ActionType != ActionTypeModelCall {
-		return errors.New("attempt is not a model_call")
+		return StoredEvent{}, errors.New("attempt is not a model_call")
 	}
-	_, err := r.attemptFailed(ctx, attempt, failure)
-	return err
+	return r.attemptFailed(ctx, attempt, failure, payload)
 }
 
-func (r *LaneRecorder) ToolCompleted(ctx context.Context, attempt AttemptHandle, payload map[string]any) error {
+func (r *LaneRecorder) ToolCompleted(ctx context.Context, attempt AttemptHandle, payload map[string]any) (StoredEvent, error) {
 	if attempt.ActionType != ActionTypeToolCall {
-		return errors.New("attempt is not a tool_call")
+		return StoredEvent{}, errors.New("attempt is not a tool_call")
 	}
-	_, err := r.attemptCompleted(ctx, attempt, payload)
-	return err
+	return r.attemptCompleted(ctx, attempt, payload)
 }
 
-func (r *LaneRecorder) ToolFailed(ctx context.Context, attempt AttemptHandle, failure error) error {
+func (r *LaneRecorder) ToolFailed(ctx context.Context, attempt AttemptHandle, failure error, payload map[string]any) (StoredEvent, error) {
 	if attempt.ActionType != ActionTypeToolCall {
-		return errors.New("attempt is not a tool_call")
+		return StoredEvent{}, errors.New("attempt is not a tool_call")
 	}
-	_, err := r.attemptFailed(ctx, attempt, failure)
-	return err
+	return r.attemptFailed(ctx, attempt, failure, payload)
 }
 
 func (r *LaneRecorder) CancelAttempt(ctx context.Context, attempt AttemptHandle, reason string) (StoredEvent, error) {
@@ -283,8 +279,8 @@ func (r *LaneRecorder) attemptCompleted(ctx context.Context, attempt AttemptHand
 	return r.Record(ctx, EventTypeAttemptCompleted, attempt.AttemptID, payload, attempt.RequestedEventID)
 }
 
-func (r *LaneRecorder) attemptFailed(ctx context.Context, attempt AttemptHandle, failure error) (StoredEvent, error) {
-	return r.Record(ctx, EventTypeAttemptFailed, attempt.AttemptID, errorPayload(failure), attempt.RequestedEventID)
+func (r *LaneRecorder) attemptFailed(ctx context.Context, attempt AttemptHandle, failure error, payload map[string]any) (StoredEvent, error) {
+	return r.Record(ctx, EventTypeAttemptFailed, attempt.AttemptID, errorPayload(failure, payload), attempt.RequestedEventID)
 }
 
 func (r *LaneRecorder) appendEvent(ctx context.Context, event ProposedEvent) (StoredEvent, error) {
@@ -318,11 +314,17 @@ func (r *LaneRecorder) appendEvents(ctx context.Context, appendID string, events
 	return stored, receipt, nil
 }
 
-func errorPayload(err error) map[string]any {
-	if err == nil {
-		return map[string]any{"error": map[string]any{"type": "unknown", "message": "unknown error"}}
+func errorPayload(err error, payload map[string]any) map[string]any {
+	result := make(map[string]any, len(payload)+1)
+	for key, value := range payload {
+		result[key] = value
 	}
-	return map[string]any{"error": map[string]any{"type": fmt.Sprintf("%T", err), "message": err.Error()}}
+	if err == nil {
+		result["error"] = map[string]any{"type": "unknown", "message": "unknown error"}
+		return result
+	}
+	result["error"] = map[string]any{"type": fmt.Sprintf("%T", err), "message": err.Error()}
+	return result
 }
 
 func payloadOrEmpty(payload map[string]any) map[string]any {

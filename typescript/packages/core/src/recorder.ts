@@ -174,9 +174,13 @@ export class LaneRecorder {
     return this.#completeAttempt(attempt, payload);
   }
 
-  modelFailed(attempt: AttemptHandle, error: unknown): Promise<StoredEvent> {
+  modelFailed(
+    attempt: AttemptHandle,
+    error: unknown,
+    payload: { [key: string]: JsonValue } = {},
+  ): Promise<StoredEvent> {
     this.#assertActionType(attempt, ActionType.MODEL_CALL);
-    return this.#failAttempt(attempt, error);
+    return this.#failAttempt(attempt, error, payload);
   }
 
   toolCompleted(attempt: AttemptHandle, payload: { [key: string]: JsonValue }): Promise<StoredEvent> {
@@ -184,9 +188,13 @@ export class LaneRecorder {
     return this.#completeAttempt(attempt, payload);
   }
 
-  toolFailed(attempt: AttemptHandle, error: unknown): Promise<StoredEvent> {
+  toolFailed(
+    attempt: AttemptHandle,
+    error: unknown,
+    payload: { [key: string]: JsonValue } = {},
+  ): Promise<StoredEvent> {
     this.#assertActionType(attempt, ActionType.TOOL_CALL);
-    return this.#failAttempt(attempt, error);
+    return this.#failAttempt(attempt, error, payload);
   }
 
   cancelAttempt(attempt: AttemptHandle, reason: string): Promise<StoredEvent> {
@@ -261,9 +269,13 @@ export class LaneRecorder {
     });
   }
 
-  #failAttempt(attempt: AttemptHandle, error: unknown): Promise<StoredEvent> {
+  #failAttempt(
+    attempt: AttemptHandle,
+    error: unknown,
+    payload: { [key: string]: JsonValue },
+  ): Promise<StoredEvent> {
     return this.record(EventType.ATTEMPT_FAILED, attempt.attempt_id, {
-      payload: errorPayload(error), causationId: attempt.requested_event_id,
+      payload: errorPayload(error, payload), causationId: attempt.requested_event_id,
     });
   }
 
@@ -324,8 +336,12 @@ export class LaneRecorder {
   }
 }
 
-function errorPayload(error: unknown): { [key: string]: JsonValue } {
+function errorPayload(
+  error: unknown,
+  payload: { [key: string]: JsonValue } = {},
+): { [key: string]: JsonValue } {
   return {
+    ...payload,
     error: {
       type: error instanceof Error ? error.name : typeof error,
       message: error instanceof Error ? error.message : String(error),

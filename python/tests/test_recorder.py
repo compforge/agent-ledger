@@ -56,7 +56,16 @@ async def test_retry_keeps_action_and_increments_attempt_number() -> None:
     recorder = await _recorder(store)
     turn = await recorder.start_turn()
     first = await recorder.before_model_call(turn, payload={"input": [], "model": {"id": "test"}})
-    await recorder.model_failed(first, RuntimeError("limited"))
+    failed = await recorder.model_failed(
+        first,
+        RuntimeError("limited"),
+        payload={"usage": {"input_tokens": 8}, "provider_request_id": "request-1"},
+    )
+    assert failed.payload == {
+        "error": {"type": "RuntimeError", "message": "limited"},
+        "usage": {"input_tokens": 8},
+        "provider_request_id": "request-1",
+    }
     second = await recorder.retry(
         first.action_id, 2, payload={"input": [], "model": {"id": "test"}}
     )

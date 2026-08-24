@@ -24,12 +24,12 @@ func (m *recordingModel) Generate(ctx context.Context, messages []agentgo.Messag
 	}
 	response, callErr := m.inner.Generate(ctx, messages, tools, options...)
 	if callErr != nil {
-		if err := m.adapter.runtimeRecorder.ModelFailed(ctx, attempt, callErr); err != nil {
+		if _, err := m.adapter.runtimeRecorder.ModelFailed(ctx, attempt, callErr, m.modelFailurePayload(response)); err != nil {
 			return nil, fmt.Errorf("record agentgo model failure: %w", err)
 		}
 		return nil, callErr
 	}
-	if err := m.adapter.runtimeRecorder.ModelCompleted(ctx, attempt, m.modelResultPayload(response.Message)); err != nil {
+	if _, err := m.adapter.runtimeRecorder.ModelCompleted(ctx, attempt, m.modelResultPayload(response.Message)); err != nil {
 		return nil, fmt.Errorf("record agentgo model result: %w", err)
 	}
 	return response, nil
@@ -46,7 +46,7 @@ func (m *recordingModel) GenerateStream(ctx context.Context, messages []agentgo.
 	}
 	source, callErr := m.inner.GenerateStream(ctx, messages, tools, options...)
 	if callErr != nil {
-		if err := m.adapter.runtimeRecorder.ModelFailed(ctx, attempt, callErr); err != nil {
+		if _, err := m.adapter.runtimeRecorder.ModelFailed(ctx, attempt, callErr, nil); err != nil {
 			return nil, fmt.Errorf("record agentgo model failure: %w", err)
 		}
 		return nil, callErr
@@ -58,7 +58,7 @@ func (m *recordingModel) GenerateStream(ctx context.Context, messages []agentgo.
 		for event := range source {
 			if event.Type == agentgo.StreamEventDone {
 				terminal = true
-				if err := m.adapter.runtimeRecorder.ModelCompleted(ctx, attempt, m.modelResultPayload(event.Message)); err != nil {
+				if _, err := m.adapter.runtimeRecorder.ModelCompleted(ctx, attempt, m.modelResultPayload(event.Message)); err != nil {
 					event = agentgo.StreamEvent{Type: agentgo.StreamEventError, Err: fmt.Errorf("record agentgo model result: %w", err)}
 				}
 			} else if event.Type == agentgo.StreamEventError {
@@ -67,7 +67,7 @@ func (m *recordingModel) GenerateStream(ctx context.Context, messages []agentgo.
 				if failure == nil {
 					failure = errors.New("agentgo model stream failed")
 				}
-				if err := m.adapter.runtimeRecorder.ModelFailed(ctx, attempt, failure); err != nil {
+				if _, err := m.adapter.runtimeRecorder.ModelFailed(ctx, attempt, failure, m.modelObservationPayload(event.Message)); err != nil {
 					event.Err = fmt.Errorf("record agentgo model failure: %w", err)
 				}
 			}
@@ -79,7 +79,7 @@ func (m *recordingModel) GenerateStream(ctx context.Context, messages []agentgo.
 		}
 		if !terminal && ctx.Err() == nil {
 			failure := errors.New("agentgo model stream closed without terminal event")
-			if err := m.adapter.runtimeRecorder.ModelFailed(ctx, attempt, failure); err != nil {
+			if _, err := m.adapter.runtimeRecorder.ModelFailed(ctx, attempt, failure, nil); err != nil {
 				failure = fmt.Errorf("%v; record failure: %w", failure, err)
 			}
 			select {
@@ -116,10 +116,23 @@ func (m *recordingModel) modelRequestPayload(messages []agentgo.Message, tools [
 }
 
 func (m *recordingModel) modelResultPayload(message agentgo.Message) map[string]any {
-	payload := map[string]any{"output": message}
+	payload := m.modelObservationPayload(message)
+	payload["output"] = message
 	if message.StopReason != "" {
 		payload["finish_reason"] = string(message.StopReason)
 	}
+	return payload
+}
+
+func (m *recordingModel) modelFailurePayload(response *agentgo.LLMResponse) map[string]any {
+	if response == nil {
+		return nil
+	}
+	return m.modelObservationPayload(response.Message)
+}
+
+func (m *recordingModel) modelObservationPayload(message agentgo.Message) map[string]any {
+	payload := make(map[string]any)
 	provider, modelName := m.ProviderName(), m.ModelName()
 	if message.Usage != nil {
 		if message.Usage.Provider != "" {

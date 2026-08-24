@@ -191,8 +191,20 @@ func TestLaneRecorderCreatesAttemptsForRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.ModelFailed(ctx, first, errors.New("timeout")); err != nil {
+	failed, err := recorder.ModelFailed(ctx, first, errors.New("timeout"), map[string]any{
+		"usage": map[string]any{"input_tokens": 8}, "provider_request_id": "request-1",
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if failed.EventType != EventTypeAttemptFailed || failed.Payload["provider_request_id"] != "request-1" {
+		t.Fatalf("failed Event = %#v", failed)
+	}
+	if usage, ok := failed.Payload["usage"].(map[string]any); !ok || usage["input_tokens"] != 8 {
+		t.Fatalf("failed usage = %#v", failed.Payload["usage"])
+	}
+	if failure, ok := failed.Payload["error"].(map[string]any); !ok || failure["message"] != "timeout" {
+		t.Fatalf("structured error = %#v", failed.Payload["error"])
 	}
 	second, err := recorder.Retry(ctx, first.ActionID, 2, map[string]any{"input": []any{}})
 	if err != nil {

@@ -156,12 +156,12 @@ func (a *Adapter) ToolMiddleware() agentgo.ToolMiddleware {
 		}
 		result, callErr := next(ctx, call.Args)
 		if callErr != nil {
-			if err := a.runtimeRecorder.ToolFailed(ctx, attempt, callErr); err != nil {
+			if _, err := a.runtimeRecorder.ToolFailed(ctx, attempt, callErr, nil); err != nil {
 				return nil, fmt.Errorf("record agentgo tool failure after execution: %w", err)
 			}
 			return result, callErr
 		}
-		if err := a.runtimeRecorder.ToolCompleted(ctx, attempt, map[string]any{"output": result}); err != nil {
+		if _, err := a.runtimeRecorder.ToolCompleted(ctx, attempt, map[string]any{"output": result}); err != nil {
 			return nil, fmt.Errorf("record agentgo tool result after execution: %w", err)
 		}
 		return result, nil
