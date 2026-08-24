@@ -69,6 +69,8 @@ class EventType(StrEnum):
     ATTEMPT_REQUESTED = "attempt.requested"
     ATTEMPT_COMPLETED = "attempt.completed"
     ATTEMPT_FAILED = "attempt.failed"
+    ATTEMPT_CANCELLED = "attempt.cancelled"
+    ATTEMPT_OUTCOME_UNKNOWN = "attempt.outcome_unknown"
     LANE_FRAMEWORK_SNAPSHOT_SAVED = "lane.framework.snapshot.saved"
     LANE_FRAMEWORK_CHECKPOINT_LINKED = "lane.framework.checkpoint.linked"
 
@@ -88,13 +90,22 @@ class Actor(BaseModel):
         return _require_timezone("created_at", value)
 
 
-class ArtifactRef(BaseModel):
+class Artifact(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    id: str = Field(default_factory=new_id, pattern=UUID7_PATTERN)
+    key: str = Field(min_length=1)
+    version: str = Field(min_length=1)
     uri: str = Field(min_length=1)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size: int = Field(ge=0)
     content_type: str = Field(min_length=1)
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("created_at")
+    @classmethod
+    def require_created_timezone(cls, value: datetime) -> datetime:
+        return _require_timezone("created_at", value)
 
 
 class CheckpointAnchor(BaseModel):
@@ -114,14 +125,14 @@ class ProposedCheckpoint(BaseModel):
     actor_id: str = Field(pattern=UUID7_PATTERN)
     format: str = Field(min_length=1)
     state: dict[str, Any] | None = None
-    artifact_ref: ArtifactRef | None = None
+    artifact_id: str | None = Field(default=None, pattern=UUID7_PATTERN)
     anchor: CheckpointAnchor | None = None
     extensions: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def require_one_state_source(self) -> ProposedCheckpoint:
-        if (self.state is None) == (self.artifact_ref is None):
-            raise ValueError("exactly one of state and artifact_ref must be set")
+        if (self.state is None) == (self.artifact_id is None):
+            raise ValueError("exactly one of state and artifact_id must be set")
         return self
 
 
@@ -190,6 +201,7 @@ class Action(BaseModel):
     id: str = Field(default_factory=new_id, pattern=UUID7_PATTERN)
     turn_id: str = Field(pattern=UUID7_PATTERN)
     type: str = Field(min_length=1)
+    key: str | None = Field(default=None, min_length=1)
     parent_action_id: str | None = Field(default=None, pattern=UUID7_PATTERN)
     effect: Effect = Field(default_factory=Effect)
     created_at: datetime = Field(default_factory=utc_now)

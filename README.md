@@ -40,9 +40,10 @@ Checkpoint key → Checkpoint revision* ── optional Lane/Event anchor
 - `Lane` is one serial line inside a Run and the optimistic-concurrency boundary. A Run normally
   has a `main` Lane and may have branch or framework-native-state Lanes.
 - `Turn` is a stable interaction boundary.
-- `Action` is logical work such as `model_call`, `tool_call`, or `compact`; its fixed `Effect`
-  records external-effect kind and idempotency before execution.
-- `Attempt` is one physical try of an Action; retrying creates a new `attempt_no`.
+- `Action` identifies logical work such as `model_call`, `tool_call`, or `compact`; its optional
+  caller-owned `key` and fixed `Effect` remain stable across retries.
+- `Attempt` is one physical try of an Action. Its Events record the complete request and observed
+  outcome for that try; retrying creates a new `attempt_no`.
 - `Event` is an immutable lifecycle, input, output, or audit fact about any hierarchy subject.
 - `Actor` stores stable producer identity once; an optional upstream `key` resolves the same Actor
   across producer restarts, while high-volume Events only retain `actor_id`.
@@ -55,6 +56,11 @@ the caller; an unknown or non-idempotent write is never silently retried.
 SDKs export constants for the Core Action and Event vocabulary. The stored fields remain open
 strings: framework and application extensions use namespaced values and are preserved by Stores.
 The normative list lives in [`spec/vocabulary.json`](spec/vocabulary.json).
+
+Core `model_call` and `tool_call` Attempts share canonical request, result, usage, error,
+cancellation, and unknown-outcome payloads. Large bodies are registered as immutable Artifact
+versions and referenced by `input_artifact_id` or `output_artifact_id`; the normative profiles live in
+[`spec/schemas/call-payload.schema.json`](spec/schemas/call-payload.schema.json).
 
 ## Repository
 

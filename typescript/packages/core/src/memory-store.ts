@@ -1,7 +1,7 @@
 import { canonicalAppendDigest, canonicalize } from "./canonical.js";
 import type { CheckpointStore, EventStore } from "./store.js";
 import type {
-  Action, Actor, AppendReceipt, Attempt, Checkpoint, Lane, ProposedCheckpoint, ProposedEvent,
+  Action, Actor, AppendReceipt, Artifact, Attempt, Checkpoint, Lane, ProposedCheckpoint, ProposedEvent,
   RunView, SessionView, StoredEvent, Turn,
 } from "./types.js";
 import { selectRun } from "./types.js";
@@ -18,6 +18,8 @@ export class SubjectMismatch extends Error {}
 export class MemoryEventStore implements EventStore, CheckpointStore {
   readonly #actors = new Map<string, Actor>();
   readonly #actorKeys = new Map<string, string>();
+  readonly #artifacts = new Map<string, Artifact>();
+  readonly #artifactKeys = new Map<string, string>();
   readonly #lanes = new Map<string, Lane>();
   readonly #laneNames = new Map<string, string>();
   readonly #turns = new Map<string, Turn>();
@@ -55,6 +57,33 @@ export class MemoryEventStore implements EventStore, CheckpointStore {
     }
     await this.createActor(actor);
     return structuredClone(actor);
+  }
+
+  async createArtifact(artifact: Artifact): Promise<void> {
+    const identity = artifactIdentity(artifact.key, artifact.version);
+    if (this.#artifactKeys.has(identity)) throw new EntityConflict(`artifact ${artifact.key} version ${artifact.version}`);
+    this.#create(this.#artifacts, "artifact", artifact.id, artifact);
+    this.#artifactKeys.set(identity, artifact.id);
+  }
+
+  async getArtifact(id: string): Promise<Artifact | undefined> {
+    return cloneOptional(this.#artifacts.get(id));
+  }
+
+  async getArtifactByKey(key: string, version: string): Promise<Artifact | undefined> {
+    const id = this.#artifactKeys.get(artifactIdentity(key, version));
+    return id === undefined ? undefined : cloneOptional(this.#artifacts.get(id));
+  }
+
+  async ensureArtifact(artifact: Artifact): Promise<Artifact> {
+    const id = this.#artifactKeys.get(artifactIdentity(artifact.key, artifact.version));
+    const stored = id === undefined ? undefined : this.#artifacts.get(id);
+    if (stored !== undefined) {
+      requireSameArtifact(stored, artifact);
+      return structuredClone(stored);
+    }
+    await this.createArtifact(artifact);
+    return structuredClone(artifact);
   }
 
   async createLane(lane: Lane): Promise<void> {
@@ -128,6 +157,9 @@ export class MemoryEventStore implements EventStore, CheckpointStore {
       return structuredClone(previous);
     }
     if (!this.#actors.has(checkpoint.actor_id)) throw new EntityNotFound(`actor ${checkpoint.actor_id}`);
+    if ("artifact_id" in checkpoint && !this.#artifacts.has(checkpoint.artifact_id)) {
+      throw new EntityNotFound(`artifact ${checkpoint.artifact_id}`);
+    }
     const latestId = this.#latestCheckpoints.get(checkpoint.key);
     const actualRevision = latestId === undefined ? 0 : this.#checkpoints.get(latestId)!.revision;
     if (actualRevision !== expectedRevision) {
@@ -270,6 +302,10 @@ function laneNameKey(sessionId: string, runId: string, name: string): string {
   return `${sessionId}\u0000${runId}\u0000${name}`;
 }
 
+function artifactIdentity(key: string, version: string): string {
+  return `${key}\u0000${version}`;
+}
+
 function cloneOptional<T>(value: T | undefined): T | undefined {
   return value === undefined ? undefined : structuredClone(value);
 }
@@ -280,13 +316,21 @@ function requireSameActor(stored: Actor, proposed: Actor): void {
   }
 }
 
+function requireSameArtifact(stored: Artifact, proposed: Artifact): void {
+  if (stored.key !== proposed.key || stored.version !== proposed.version
+    || stored.uri !== proposed.uri || stored.sha256 !== proposed.sha256
+    || stored.size !== proposed.size || stored.content_type !== proposed.content_type) {
+    throw new EntityConflict(`artifact key ${proposed.key}`);
+  }
+}
+
 function validateCheckpoint(value: ProposedCheckpoint): void {
   if (value.schema_version !== "1.0" || value.id === "" || value.key === ""
     || value.actor_id === "" || value.format === "") {
     throw new TypeError("checkpoint requires schema version, id, key, actor, and format");
   }
-  if (("state" in value) === ("artifact_ref" in value)) {
-    throw new TypeError("exactly one of state and artifact_ref must be set");
+  if (("state" in value) === ("artifact_id" in value)) {
+    throw new TypeError("exactly one of state and artifact_id must be set");
   }
   if (value.anchor !== undefined && (!Number.isSafeInteger(value.anchor.last_applied_seq)
     || value.anchor.last_applied_seq < 1 || value.anchor.lane_id === ""

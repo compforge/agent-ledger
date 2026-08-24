@@ -8,6 +8,7 @@ import pytest
 from agent_ledger import (
     Action,
     Actor,
+    Artifact,
     Attempt,
     DuplicateEvent,
     EntityConflict,
@@ -76,6 +77,38 @@ async def test_actor_key_resolves_stable_identity(event_store: EventStore) -> No
         await event_store.ensure_actor(
             Actor(key=original.key, type=original.type, framework="other")
         )
+
+
+async def test_artifact_key_and_version_resolve_immutable_content(
+    event_store: EventStore,
+) -> None:
+    original = Artifact(
+        key="model/request",
+        version="v1",
+        uri="s3://artifacts/model-request-v1",
+        sha256="0" * 64,
+        size=42,
+        content_type="application/json",
+    )
+    await event_store.create_artifact(original)
+
+    assert await event_store.get_artifact_by_key(original.key, original.version) == original
+    restarted = Artifact(
+        key=original.key,
+        version=original.version,
+        uri=original.uri,
+        sha256=original.sha256,
+        size=original.size,
+        content_type=original.content_type,
+    )
+    assert await event_store.ensure_artifact(restarted) == original
+    with pytest.raises(EntityConflict):
+        await event_store.ensure_artifact(
+            restarted.model_copy(update={"uri": "s3://artifacts/different"})
+        )
+
+    second = restarted.model_copy(update={"id": new_id(), "version": "v2"})
+    assert await event_store.ensure_artifact(second) == second
 
 
 async def test_atomic_batch_sequences_and_reads(event_store: EventStore) -> None:
@@ -170,7 +203,7 @@ async def test_attempt_number_is_unique_within_action(event_store: EventStore) -
 async def test_load_session_contains_structure_and_events(event_store: EventStore) -> None:
     target = await lane(event_store)
     turn = Turn(lane_id=target.id)
-    action = Action(turn_id=turn.id, type="compact")
+    action = Action(turn_id=turn.id, type="compact", key="compact-1")
     attempt = Attempt(action_id=action.id, attempt_no=1)
     await event_store.create_turn(turn)
     await event_store.create_action(action)
@@ -189,6 +222,7 @@ async def test_load_session_contains_structure_and_events(event_store: EventStor
     assert [item.id for item in view.lanes] == [target.id]
     assert [item.id for item in view.turns] == [turn.id]
     assert [item.id for item in view.actions] == [action.id]
+    assert view.actions[0].key == "compact-1"
     assert [item.id for item in view.attempts] == [attempt.id]
     assert [item.id for item in view.events] == [requested.id]
 

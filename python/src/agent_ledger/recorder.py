@@ -238,13 +238,17 @@ class LaneRecorder:
         self,
         turn: Turn | str,
         *,
+        action_key: str,
         payload: dict[str, Any],
         effect: Effect | None = None,
     ) -> AttemptHandle:
+        if not action_key:
+            raise ValueError("tool_call requires an action key")
         return await self._before_call(
             ActionType.TOOL_CALL,
             _entity_id(turn),
             payload,
+            action_key=action_key,
             effect=effect or Effect(),
         )
 
@@ -265,6 +269,7 @@ class LaneRecorder:
             action_type,
             action.turn_id,
             payload,
+            action_key=action.key,
             action=action,
             attempt_no=attempt_no,
         )
@@ -293,6 +298,31 @@ class LaneRecorder:
             EventType.ATTEMPT_FAILED,
             attempt.attempt_id,
             payload=_error_payload(error, payload),
+            causation_id=attempt.requested_event_id,
+        )
+
+    async def cancel_attempt(self, attempt: AttemptHandle, *, reason: str) -> StoredEvent:
+        return await self.record(
+            EventType.ATTEMPT_CANCELLED,
+            attempt.attempt_id,
+            payload={"reason": reason},
+            causation_id=attempt.requested_event_id,
+        )
+
+    async def mark_attempt_outcome_unknown(
+        self,
+        attempt: AttemptHandle,
+        *,
+        reason: str,
+        superseded_by_attempt_id: str | None = None,
+    ) -> StoredEvent:
+        payload = {"reason": reason}
+        if superseded_by_attempt_id is not None:
+            payload["superseded_by_attempt_id"] = superseded_by_attempt_id
+        return await self.record(
+            EventType.ATTEMPT_OUTCOME_UNKNOWN,
+            attempt.attempt_id,
+            payload=payload,
             causation_id=attempt.requested_event_id,
         )
 
@@ -341,11 +371,13 @@ class LaneRecorder:
         *,
         event_type: str = EventType.ACTION_COMPLETED,
         payload: dict[str, Any] | None = None,
+        action_key: str | None = None,
         parent_action_id: str | None = None,
     ) -> tuple[Action, StoredEvent]:
         action = Action(
             turn_id=_entity_id(turn),
             type=action_type,
+            key=action_key,
             parent_action_id=parent_action_id,
         )
         await self.store.create_action(action)
@@ -434,12 +466,18 @@ class LaneRecorder:
         turn_id: str,
         payload: dict[str, Any],
         *,
+        action_key: str | None = None,
         action: Action | None = None,
         effect: Effect | None = None,
         attempt_no: int = 1,
     ) -> AttemptHandle:
         if action is None:
-            action = Action(turn_id=turn_id, type=action_type, effect=effect or Effect())
+            action = Action(
+                turn_id=turn_id,
+                type=action_type,
+                key=action_key,
+                effect=effect or Effect(),
+            )
             await self.store.create_action(action)
         attempt = Attempt(action_id=action.id, attempt_no=attempt_no)
         await self.store.create_attempt(attempt)
@@ -476,6 +514,5 @@ def _error_payload(
 ) -> dict[str, Any]:
     return {
         **(payload or {}),
-        "error_type": type(error).__name__,
-        "error": str(error),
+        "error": {"type": type(error).__name__, "message": str(error)},
     }

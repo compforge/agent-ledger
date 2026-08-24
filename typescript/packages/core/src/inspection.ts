@@ -92,6 +92,8 @@ function unresolvedAttempts(view: RunView): UnresolvedAttempt[] {
     } else if (
       event.event_type === EventType.ATTEMPT_COMPLETED
       || event.event_type === EventType.ATTEMPT_FAILED
+      || event.event_type === EventType.ATTEMPT_CANCELLED
+      || event.event_type === EventType.ATTEMPT_OUTCOME_UNKNOWN
     ) {
       open.delete(attempt.id);
     }

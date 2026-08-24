@@ -76,12 +76,7 @@ def test_checkpoint_requires_exactly_one_state_source() -> None:
             actor_id=actor.id,
             format="application/json",
             state={},
-            artifact_ref={
-                "uri": "memory://state",
-                "sha256": "0" * 64,
-                "size": 2,
-                "content_type": "application/json",
-            },
+            artifact_id=new_id(),
         )
 
 

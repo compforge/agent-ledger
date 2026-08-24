@@ -22,17 +22,7 @@
     "actor_id": { "type": "string", "format": "uuid" },
     "format": { "type": "string", "minLength": 1 },
     "state": {},
-    "artifact_ref": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["uri", "sha256", "size", "content_type"],
-      "properties": {
-        "uri": { "type": "string", "minLength": 1 },
-        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-        "size": { "type": "integer", "minimum": 0 },
-        "content_type": { "type": "string", "minLength": 1 }
-      }
-    },
+    "artifact_id": { "type": "string", "format": "uuid" },
     "anchor": {
       "type": "object",
       "additionalProperties": false,
@@ -47,7 +37,7 @@
     "created_at": { "type": "string", "format": "date-time" }
   },
   "oneOf": [
-    { "required": ["state"], "not": { "required": ["artifact_ref"] } },
-    { "required": ["artifact_ref"], "not": { "required": ["state"] } }
+    { "required": ["state"], "not": { "required": ["artifact_id"] } },
+    { "required": ["artifact_id"], "not": { "required": ["state"] } }
   ]
 }

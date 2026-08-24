@@ -36,6 +36,8 @@
     "attempt.requested",
     "attempt.completed",
     "attempt.failed",
+    "attempt.cancelled",
+    "attempt.outcome_unknown",
     "lane.framework.snapshot.saved",
     "lane.framework.checkpoint.linked"
   ]

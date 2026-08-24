@@ -48,6 +48,14 @@ test("Pi direct harness hooks record model action and attempt", async () => {
   assert.deepEqual(view.events.map((event) => event.event_type), [
     "turn.started", "attempt.requested", "attempt.completed", "turn.completed",
   ]);
+  assert.deepEqual(view.events[1]?.payload, {
+    model: { id: "model", provider: "test" },
+    input: [{ role: "user", content: "hello" }],
+  });
+  assert.deepEqual(view.events[2]?.payload, {
+    output: { role: "assistant", content: "done", stopReason: "stop" },
+    finish_reason: "stop",
+  });
 });
 
 test("Pi model hook fails closed before execution", async () => {

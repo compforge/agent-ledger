@@ -4,7 +4,7 @@ from agent_ledger.adapters import (
     RecordingGuarantee,
     RecoveryMode,
 )
-from agent_ledger.artifacts import ArtifactStore, MemoryArtifactStore
+from agent_ledger.artifacts import ArtifactContentStore, MemoryArtifactContentStore
 from agent_ledger.errors import (
     AgentLedgerError,
     CheckpointConflict,
@@ -33,7 +33,7 @@ from agent_ledger.models import (
     ActionType,
     Actor,
     AppendReceipt,
-    ArtifactRef,
+    Artifact,
     Attempt,
     Checkpoint,
     CheckpointAnchor,
@@ -53,5 +53,5 @@ from agent_ledger.models import (
     select_run,
 )
 from agent_ledger.recorder import AttemptHandle, LaneRecorder
-from agent_ledger.store import ActorStore, CheckpointStore, EventStore
+from agent_ledger.store import ActorStore, ArtifactStore, CheckpointStore, EventStore
 from agent_ledger.trajectory import project_atif

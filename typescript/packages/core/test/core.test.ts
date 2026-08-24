@@ -17,6 +17,7 @@ import {
   newAction,
   newActor,
   newActorWithKey,
+  newArtifact,
   newAttempt,
   newId,
   newLane,
@@ -37,6 +38,24 @@ test("actor key resolves stable producer identity", async () => {
   );
 });
 
+test("artifact key and version resolve immutable content", async () => {
+  const store = new MemoryEventStore();
+  const original = newArtifact(
+    "model/request", "v1", "s3://artifacts/model-request-v1", "0".repeat(64), 42, "application/json",
+  );
+  await store.createArtifact(original);
+  assert.deepEqual(await store.getArtifactByKey(original.key, original.version), original);
+  const restarted = newArtifact(
+    original.key, original.version, original.uri, original.sha256, original.size, original.content_type,
+  );
+  assert.deepEqual(await store.ensureArtifact(restarted), original);
+  await assert.rejects(store.ensureArtifact({ ...restarted, uri: "s3://artifacts/different" }));
+  const second = newArtifact(
+    original.key, "v2", `${original.uri}-v2`, original.sha256, original.size, original.content_type,
+  );
+  assert.deepEqual(await store.ensureArtifact(second), second);
+});
+
 test("core vocabulary matches the cross-language registry", async () => {
   const vocabulary = JSON.parse(
     await readFile(resolve(process.cwd(), "../spec/vocabulary.json"), "utf8"),
@@ -53,7 +72,7 @@ test("execution hierarchy projects a session", async () => {
   const actor = newActor("agent", "plain-loop");
   const lane = newLane("session", "run", "main");
   const turn = newTurn(lane.id);
-  const action = newAction(turn.id, "model_call");
+  const action = newAction(turn.id, "model_call", "model-1");
   const attempt = newAttempt(action.id, 1);
   await store.createActor(actor);
   await store.createLane(lane);
@@ -65,7 +84,7 @@ test("execution hierarchy projects a session", async () => {
     subject_id: attempt.id,
     event_type: "attempt.requested",
     actor_id: actor.id,
-    payload: { model: "test" },
+    payload: { model: { id: "test" }, input: [] },
   });
   const receipt = await store.append(lane.id, 0, newId(), [event]);
   assert.equal(receipt.last_seq, 1);
@@ -74,6 +93,7 @@ test("execution hierarchy projects a session", async () => {
     [view.actors.length, view.lanes.length, view.turns.length, view.actions.length, view.attempts.length, view.events.length],
     [1, 1, 1, 1, 1, 1],
   );
+  assert.equal(view.actions[0]?.key, "model-1");
 });
 
 test("append digest matches the cross-language vector", async () => {
@@ -151,12 +171,36 @@ test("recorder gives retries a new attempt under the same action", async () => {
     store, sessionId: "session", runId: "run", actor: newActor("agent", "plain-loop"),
   });
   const turn = await recorder.startTurn();
-  const first = await recorder.beforeModelCall(turn.id, { model: "test" });
+  const first = await recorder.beforeModelCall(turn.id, { model: { id: "test" }, input: [] });
   await recorder.modelFailed(first, new Error("timeout"));
-  const second = await recorder.retry(first.action_id, 2, { model: "test" });
+  const second = await recorder.retry(first.action_id, 2, { model: { id: "test" }, input: [] });
   assert.equal(second.action_id, first.action_id);
   assert.notEqual(second.attempt_id, first.attempt_id);
   assert.equal(second.attempt_no, 2);
+});
+
+test("cancelled and unknown outcomes close physical attempts", async () => {
+  const store = new MemoryEventStore();
+  const recorder = await LaneRecorder.open({
+    store, sessionId: "session", runId: "run", actor: newActor("agent", "plain-loop"),
+  });
+  const turn = await recorder.startTurn();
+  const cancelled = await recorder.beforeModelCall(turn.id, { input: [] });
+  await recorder.cancelAttempt(cancelled, "user_interrupt");
+  const unknown = await recorder.beforeToolCall(
+    turn.id, "tool-1", { tool_name: "write", input: {} },
+  );
+  const replacement = await recorder.retry(unknown.action_id, 2, {
+    tool_name: "write", input: {},
+    recovery_decision_id: "decision-1",
+  });
+  await recorder.markAttemptOutcomeUnknown(unknown, "worker_lost", replacement.attempt_id);
+
+  const inspection = inspectRun(await store.loadRun("session", "run"));
+  assert.deepEqual(
+    inspection.unresolved_attempts.map((attempt) => attempt.attempt_id),
+    [replacement.attempt_id],
+  );
 });
 
 test("run completion links a checkpoint atomically and remains inspectable", async () => {
@@ -166,7 +210,9 @@ test("run completion links a checkpoint atomically and remains inspectable", asy
     store, sessionId: "session", runId: "run", actor,
   });
   const turn = await recorder.startTurn();
-  const unresolved = await recorder.beforeToolCall(turn.id, { tool: "charge" });
+  const unresolved = await recorder.beforeToolCall(
+    turn.id, "charge-1", { tool_name: "charge", input: {} },
+  );
 
   const checkpointLinked = proposedEvent({
     lane_id: recorder.lane.id,

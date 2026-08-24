@@ -39,17 +39,20 @@ export function bindPiHarness(harness: PiHarnessLike, recorder: LaneRecorder): (
   }));
   disposers.push(harness.on("before_provider_request", async (event) => {
     if (currentTurn === undefined) throw new Error("Pi model call occurred outside a turn");
-    const attempt = await recorder.beforeModelCall(currentTurn.id, {
-      model: asJson(modelIdentity(event.model)), context,
-    });
+    const payload: { [key: string]: JsonValue } = { input: context };
+    const model = modelIdentity(event.model);
+    if (model !== undefined) payload.model = model;
+    const attempt = await recorder.beforeModelCall(currentTurn.id, payload);
     pendingModels.push(attempt);
     return undefined;
   }));
   disposers.push(harness.on("tool_call", async (event) => {
     if (currentTurn === undefined) throw new Error("Pi tool call occurred outside a turn");
-    const attempt = await recorder.beforeToolCall(currentTurn.id, {
-      tool_call_id: event.toolCallId, tool_name: event.toolName, input: asJson(event.input),
-    });
+    const attempt = await recorder.beforeToolCall(
+      currentTurn.id,
+      event.toolCallId,
+      { tool_name: event.toolName, input: asJson(event.input) },
+    );
     pendingTools.set(event.toolCallId, attempt);
     return undefined;
   }));
@@ -57,7 +60,9 @@ export function bindPiHarness(harness: PiHarnessLike, recorder: LaneRecorder): (
     const attempt = pendingTools.get(event.toolCallId);
     if (!attempt) return undefined;
     if (event.isError) await recorder.toolFailed(attempt, new Error(textContent(event.content)));
-    else await recorder.toolCompleted(attempt, { content: asJson(event.content), details: asJson(event.details) });
+    else await recorder.toolCompleted(attempt, {
+      output: { content: asJson(event.content), details: asJson(event.details) },
+    });
     pendingTools.delete(event.toolCallId);
     return undefined;
   }));
@@ -84,7 +89,7 @@ export function bindPiHarness(harness: PiHarnessLike, recorder: LaneRecorder): (
         const attempt = pendingModels.shift();
         if (!attempt) break;
         if (turnFailure) await recorder.modelFailed(attempt, new Error(turnFailure));
-        else await recorder.modelCompleted(attempt, { message: asJson(event.message) });
+        else await recorder.modelCompleted(attempt, modelResult(event.message));
         break;
       }
       case "turn_end":
@@ -110,10 +115,46 @@ function asJson(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
-function modelIdentity(model: unknown): Record<string, unknown> {
-  if (typeof model !== "object" || model === null) return {};
+function modelIdentity(model: unknown): { [key: string]: JsonValue } | undefined {
+  if (typeof model !== "object" || model === null) return undefined;
   const candidate = model as Record<string, unknown>;
-  return { id: candidate.id, provider: candidate.provider };
+  if (typeof candidate.id !== "string" || candidate.id.length === 0) return undefined;
+  return {
+    id: candidate.id,
+    ...(typeof candidate.provider === "string" && candidate.provider.length > 0
+      ? { provider: candidate.provider }
+      : {}),
+  };
+}
+
+function modelResult(message: unknown): { [key: string]: JsonValue } {
+  const payload: { [key: string]: JsonValue } = { output: asJson(message) };
+  if (typeof message !== "object" || message === null) return payload;
+  const candidate = message as Record<string, unknown>;
+  const finishReason = candidate.stopReason ?? candidate.stop_reason;
+  if (typeof finishReason === "string" && finishReason.length > 0) {
+    payload.finish_reason = finishReason;
+  }
+  const model = modelIdentity({ id: candidate.model, provider: candidate.provider });
+  if (model !== undefined) payload.model = model;
+  const usage = normalizedUsage(candidate.usage);
+  if (usage !== undefined) payload.usage = usage;
+  return payload;
+}
+
+function normalizedUsage(value: unknown): { [key: string]: JsonValue } | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const source = value as Record<string, unknown>;
+  const fields: Array<[string, string]> = [
+    ["input_tokens", "input"], ["output_tokens", "output"],
+    ["cache_read_input_tokens", "cacheRead"], ["cache_write_input_tokens", "cacheWrite"],
+    ["total_tokens", "totalTokens"],
+  ];
+  const usage: { [key: string]: JsonValue } = {};
+  for (const [target, sourceKey] of fields) {
+    if (typeof source[sourceKey] === "number") usage[target] = source[sourceKey];
+  }
+  return Object.keys(usage).length === 0 ? undefined : usage;
 }
 
 function textContent(content: unknown): string {

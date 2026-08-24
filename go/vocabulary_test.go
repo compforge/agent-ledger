@@ -36,6 +36,7 @@ func TestCoreVocabularyMatchesRegistry(t *testing.T) {
 		EventTypeTurnStarted, EventTypeTurnCompleted, EventTypeTurnFailed,
 		EventTypeActionStarted, EventTypeActionCompleted, EventTypeActionFailed,
 		EventTypeAttemptRequested, EventTypeAttemptCompleted, EventTypeAttemptFailed,
+		EventTypeAttemptCancelled, EventTypeAttemptOutcomeUnknown,
 		EventTypeLaneFrameworkSnapshotSaved, EventTypeLaneFrameworkCheckpointLinked,
 	}
 	if !reflect.DeepEqual(actionTypes, registry.ActionTypes) {

@@ -26,16 +26,20 @@ type MessageCodec interface {
 	Decode(kind string, data json.RawMessage) (agentgo.AgentMessage, error)
 }
 
-type ToolEffectResolver func(agentgo.ToolCall) agentledger.Effect
+type ToolSemantics struct {
+	Effect         agentledger.Effect
+	IdempotencyKey string
+}
+
+type ToolSemanticsResolver func(agentgo.ToolCall) ToolSemantics
 
 type ToolRetryDecision struct {
-	Approved bool
-	Metadata map[string]any
+	Approved           bool
+	RecoveryDecisionID string
 }
 
 // ToolRetryPolicy authorizes one physical retry of one unresolved Attempt.
-// The caller may attach decision metadata so a restored process can prove that
-// the same authorization was already consumed by a later Attempt.
+// RecoveryDecisionID proves which one-shot authorization the retry consumed.
 type ToolRetryPolicy func(agentledger.Action, agentledger.Attempt, agentgo.ToolCall) ToolRetryDecision
 
 type Config struct {
@@ -47,8 +51,8 @@ type Config struct {
 	MessageCodec    MessageCodec
 	BeforeTurn      agentgo.BeforeTurnHook
 	AfterTurn       agentgo.AfterTurnHook
-	// ToolEffect fixes the logical Action's Effect before its first Attempt.
-	ToolEffect ToolEffectResolver
+	// ToolSemantics fixes the logical Action's Effect and effective idempotency key before execution.
+	ToolSemantics ToolSemanticsResolver
 	// CanRetryTool is intentionally fail-closed by default; recovery policy belongs to the caller.
 	CanRetryTool     ToolRetryPolicy
 	OperationTimeout time.Duration
@@ -61,7 +65,7 @@ type Adapter struct {
 	timeout         time.Duration
 	beforeTurn      agentgo.BeforeTurnHook
 	afterTurn       agentgo.AfterTurnHook
-	toolEffect      ToolEffectResolver
+	toolSemantics   ToolSemanticsResolver
 	canRetryTool    ToolRetryPolicy
 
 	mu          sync.Mutex
@@ -83,9 +87,11 @@ func New(ctx context.Context, config Config) (*Adapter, error) {
 	if nativeSessionID == "" {
 		nativeSessionID = config.SessionID
 	}
-	toolEffect := config.ToolEffect
-	if toolEffect == nil {
-		toolEffect = func(agentgo.ToolCall) agentledger.Effect { return agentledger.UnknownEffect() }
+	toolSemantics := config.ToolSemantics
+	if toolSemantics == nil {
+		toolSemantics = func(agentgo.ToolCall) ToolSemantics {
+			return ToolSemantics{Effect: agentledger.UnknownEffect()}
+		}
 	}
 	canRetryTool := config.CanRetryTool
 	if canRetryTool == nil {
@@ -110,7 +116,7 @@ func New(ctx context.Context, config Config) (*Adapter, error) {
 	return &Adapter{
 		runtimeRecorder: runtimeRecorder, stateRecorder: stateRecorder, codec: codec,
 		timeout: config.OperationTimeout, beforeTurn: config.BeforeTurn, afterTurn: config.AfterTurn,
-		toolEffect: toolEffect, canRetryTool: canRetryTool,
+		toolSemantics: toolSemantics, canRetryTool: canRetryTool,
 	}, nil
 }
 
@@ -136,10 +142,15 @@ func (a *Adapter) ToolMiddleware() agentgo.ToolMiddleware {
 		if err != nil {
 			return nil, err
 		}
-		payload := map[string]any{
-			"tool_call_id": call.ID, "tool_name": call.Name, "arguments": string(call.Args),
+		semantics := a.toolSemantics(call)
+		if semantics.Effect.Idempotency == agentledger.IdempotencyKeyed && semantics.IdempotencyKey == "" {
+			return nil, fmt.Errorf("tool %s declares keyed idempotency without an idempotency key", call.Name)
 		}
-		attempt, err := a.beforeToolCall(ctx, turnID, call, payload)
+		payload := map[string]any{"tool_name": call.Name, "input": call.Args}
+		if semantics.IdempotencyKey != "" {
+			payload["idempotency_key"] = semantics.IdempotencyKey
+		}
+		attempt, err := a.beforeToolCall(ctx, turnID, call, semantics.Effect, payload)
 		if err != nil {
 			return nil, fmt.Errorf("record agentgo tool request: %w", err)
 		}
@@ -150,7 +161,7 @@ func (a *Adapter) ToolMiddleware() agentgo.ToolMiddleware {
 			}
 			return result, callErr
 		}
-		if err := a.runtimeRecorder.ToolCompleted(ctx, attempt, map[string]any{"result": string(result)}); err != nil {
+		if err := a.runtimeRecorder.ToolCompleted(ctx, attempt, map[string]any{"output": result}); err != nil {
 			return nil, fmt.Errorf("record agentgo tool result after execution: %w", err)
 		}
 		return result, nil
@@ -161,6 +172,7 @@ func (a *Adapter) beforeToolCall(
 	ctx context.Context,
 	turnID string,
 	call agentgo.ToolCall,
+	effect agentledger.Effect,
 	payload map[string]any,
 ) (agentledger.AttemptHandle, error) {
 	view, err := a.runtimeRecorder.Store().LoadSession(ctx, a.runtimeRecorder.SessionID())
@@ -169,7 +181,15 @@ func (a *Adapter) beforeToolCall(
 	}
 	unresolved, exists := unresolvedToolAction(agentledger.SelectRun(view, a.runtimeRecorder.RunID()), call.ID)
 	if !exists {
-		return a.runtimeRecorder.BeforeToolCallWithEffect(ctx, turnID, payload, a.toolEffect(call))
+		return a.runtimeRecorder.BeforeToolCallWithEffect(ctx, turnID, call.ID, payload, effect)
+	}
+	if unresolved.Action.Effect.Idempotency == agentledger.IdempotencyKeyed {
+		key, _ := payload["idempotency_key"].(string)
+		if key == "" || key != unresolved.IdempotencyKey {
+			return agentledger.AttemptHandle{}, fmt.Errorf(
+				"tool action %s retry changed its effective idempotency key", unresolved.Action.ID,
+			)
+		}
 	}
 	// A restored AgentGo transcript re-emits the same ToolCall ID. Keep that
 	// physical retry under the original logical Action and its fixed Effect.
@@ -177,10 +197,8 @@ func (a *Adapter) beforeToolCall(
 	if !decision.Approved {
 		return agentledger.AttemptHandle{}, fmt.Errorf("unresolved tool action %s attempt %s is not approved for retry", unresolved.Action.ID, unresolved.Attempt.ID)
 	}
-	for key, value := range decision.Metadata {
-		if _, reserved := payload[key]; !reserved {
-			payload[key] = value
-		}
+	if decision.RecoveryDecisionID != "" {
+		payload["recovery_decision_id"] = decision.RecoveryDecisionID
 	}
 	retry, err := a.runtimeRecorder.Retry(ctx, unresolved.Action.ID, unresolved.Attempt.AttemptNo+1, payload)
 	if err != nil {
@@ -190,13 +208,14 @@ func (a *Adapter) beforeToolCall(
 	// its execution lifecycle before invoking the external tool again; recovery
 	// policy can still inspect the structured reason and the superseding Attempt.
 	for _, prior := range unresolved.All {
-		if _, err := a.runtimeRecorder.Record(ctx, agentledger.EventTypeAttemptFailed, prior.Attempt.ID, map[string]any{
-			"error": map[string]any{
-				"type":    "outcome_unknown",
-				"message": "superseded by an authorized retry",
-			},
-			"superseded_by_attempt_id": retry.AttemptID,
-		}, prior.RequestedEventID); err != nil {
+		handle := agentledger.AttemptHandle{
+			ActionType: agentledger.ActionTypeToolCall, ActionID: unresolved.Action.ID,
+			AttemptID: prior.Attempt.ID, AttemptNo: prior.Attempt.AttemptNo,
+			RequestedEventID: prior.RequestedEventID,
+		}
+		if _, err := a.runtimeRecorder.MarkAttemptOutcomeUnknown(
+			ctx, handle, "superseded by an authorized retry", retry.AttemptID,
+		); err != nil {
 			return agentledger.AttemptHandle{}, fmt.Errorf("close superseded tool attempt %s: %w", prior.Attempt.ID, err)
 		}
 	}
@@ -209,15 +228,16 @@ type unresolvedAttempt struct {
 }
 
 type unresolvedTool struct {
-	Action  agentledger.Action
-	Attempt agentledger.Attempt
-	All     []unresolvedAttempt
+	Action         agentledger.Action
+	Attempt        agentledger.Attempt
+	IdempotencyKey string
+	All            []unresolvedAttempt
 }
 
 func unresolvedToolAction(view agentledger.RunView, toolCallID string) (unresolvedTool, bool) {
 	actions := make(map[string]agentledger.Action, len(view.Actions))
 	for _, action := range view.Actions {
-		if action.Type == agentledger.ActionTypeToolCall {
+		if action.Type == agentledger.ActionTypeToolCall && action.Key == toolCallID {
 			actions[action.ID] = action
 		}
 	}
@@ -236,26 +256,29 @@ func unresolvedToolAction(view agentledger.RunView, toolCallID string) (unresolv
 		switch event.EventType {
 		case agentledger.EventTypeAttemptRequested:
 			requested[event.SubjectID] = event
-		case agentledger.EventTypeAttemptCompleted, agentledger.EventTypeAttemptFailed:
+		case agentledger.EventTypeAttemptCompleted, agentledger.EventTypeAttemptFailed,
+			agentledger.EventTypeAttemptCancelled, agentledger.EventTypeAttemptOutcomeUnknown:
 			terminal[event.SubjectID] = true
 		}
 	}
 	var selected agentledger.Attempt
-	for attemptID, event := range requested {
+	for attemptID := range requested {
 		attempt := attempts[attemptID]
-		callID, _ := event.Payload["tool_call_id"].(string)
-		if callID == toolCallID && !terminal[attemptID] && attempt.AttemptNo > selected.AttemptNo {
+		if !terminal[attemptID] && attempt.AttemptNo > selected.AttemptNo {
 			selected = attempt
 		}
 	}
 	if selected.ID == "" {
 		return unresolvedTool{}, false
 	}
-	result := unresolvedTool{Action: actions[selected.ActionID], Attempt: selected}
+	selectedRequest := requested[selected.ID]
+	idempotencyKey, _ := selectedRequest.Payload["idempotency_key"].(string)
+	result := unresolvedTool{
+		Action: actions[selected.ActionID], Attempt: selected, IdempotencyKey: idempotencyKey,
+	}
 	for attemptID, event := range requested {
 		attempt := attempts[attemptID]
-		callID, _ := event.Payload["tool_call_id"].(string)
-		if attempt.ActionID == selected.ActionID && callID == toolCallID && !terminal[attemptID] {
+		if attempt.ActionID == selected.ActionID && !terminal[attemptID] {
 			result.All = append(result.All, unresolvedAttempt{Attempt: attempt, RequestedEventID: event.ID})
 		}
 	}

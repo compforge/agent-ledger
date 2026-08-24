@@ -33,6 +33,7 @@ export interface Action {
   id: string;
   turn_id: string;
   type: string;
+  key?: string;
   parent_action_id?: string;
   effect: Effect;
   created_at: string;
@@ -45,11 +46,15 @@ export interface Attempt {
   created_at: string;
 }
 
-export interface ArtifactRef {
+export interface Artifact {
+  id: string;
+  key: string;
+  version: string;
   uri: string;
   sha256: string;
   size: number;
   content_type: string;
+  created_at: string;
 }
 
 export interface CheckpointAnchor {
@@ -69,8 +74,8 @@ interface ProposedCheckpointBase {
 }
 
 export type ProposedCheckpoint = ProposedCheckpointBase & (
-  | { state: { [key: string]: JsonValue }; artifact_ref?: never }
-  | { artifact_ref: ArtifactRef; state?: never }
+  | { state: { [key: string]: JsonValue }; artifact_id?: never }
+  | { artifact_id: string; state?: never }
 );
 
 export type Checkpoint = ProposedCheckpoint & {
@@ -206,11 +211,13 @@ export function newTurn(laneId: string): Turn {
 export function newAction(
   turnId: string,
   type: string,
+  key?: string,
   parentActionId?: string,
   effect: Effect = { kind: "unknown", idempotency: "unknown" },
 ): Action {
   return {
     id: newId(), turn_id: turnId, type,
+    ...(key === undefined ? {} : { key }),
     ...(parentActionId === undefined ? {} : { parent_action_id: parentActionId }),
     effect,
     created_at: now(),
@@ -219,6 +226,19 @@ export function newAction(
 
 export function newAttempt(actionId: string, attemptNo: number): Attempt {
   return { id: newId(), action_id: actionId, attempt_no: attemptNo, created_at: now() };
+}
+
+export function newArtifact(
+  key: string,
+  version: string,
+  uri: string,
+  sha256: string,
+  size: number,
+  contentType: string,
+): Artifact {
+  return {
+    id: newId(), key, version, uri, sha256, size, content_type: contentType, created_at: now(),
+  };
 }
 
 export function proposedCheckpoint(

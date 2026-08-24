@@ -48,8 +48,9 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
    和从属关系；生命周期、输入、输出和失败均表达为 Event。
 5. Event 的 `event_type` 前缀决定 `subject_id` 的类型；`causation_id` 表达因果。时间戳、UUIDv7
    和 Session 投影顺序都不能替代因果关系。
-6. 严格 Adapter 必须在模型或工具调用前持久化 `attempt.requested`，在 Loop 前进前写入
-   `attempt.completed` 或 `attempt.failed`。未决副作用工具不能静默重试。
+6. 严格 Adapter 必须在模型或工具调用前持久化 `attempt.requested`，在 Loop 前进前写入 Core
+   terminal outcome。`cancelled` 只表示已确认取消，无法确认外部结果时使用 `outcome_unknown`；未决
+   副作用工具不能静默重试。
 7. normalized Events 服务跨框架审计和分析；Checkpoint 保存不透明的 framework-native State。
    Pi entry tree 等私有语义不能提升为 Core 模型。
 8. Store 保证原子批次、canonical-content 幂等、Lane OCC、全局 Event/append ID 唯一以及不可变
@@ -66,7 +67,8 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 - Adapter capability 必须描述实际保证，不能把 telemetry-only hook 标记为 strict。
 - Python 关系型 Store 使用 SQLAlchemy；Go 关系型 Store 使用 GORM。连接、driver、连接池和超时由
   应用显式注入；测试可用 SQLite，协议不得绑定具体数据库方言。
-- 大输入输出通过 `ArtifactRef` 引用；Artifact Store 保存内容，不把大对象塞进 Event。
+- 大输入输出先注册为带 caller-owned `key` / `version` 的不可变 `Artifact`；Event 和
+  Checkpoint 只保存 `artifact_id`，实际内容由外部 Content Store 保存。
 - 仓库公开发布，禁止提交内部链接、标识、凭据、个人机器路径或仅适用于内部环境的约定。
 - 开发和验证入口统一使用根 `Makefile`。
 
@@ -77,6 +79,8 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 - `spec/rfcs/0002-polyglot-adapters.md` — 多语言 Adapter、能力声明与恢复边界
 - `docs/checkpoint.md` — Checkpoint 对象、保存契约、Ledger 锚点与组合恢复
 - `spec/schemas/event.schema.json` — Event envelope
+- `spec/schemas/artifact.schema.json` — Artifact identity and immutable version metadata
+- `spec/schemas/call-payload.schema.json` — Core model/tool Attempt payload profiles
 - `spec/schemas/checkpoint.schema.json` — Checkpoint envelope
 - `spec/schemas/mysql.sql` — 无外键的参考关系型 Schema
 - `spec/schemas/adapter.schema.json` — Adapter descriptor

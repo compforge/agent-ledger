@@ -12,8 +12,16 @@ type ActorStore interface {
 	EnsureActor(context.Context, Actor) (Actor, error)
 }
 
+type ArtifactStore interface {
+	CreateArtifact(context.Context, Artifact) error
+	GetArtifact(context.Context, string) (Artifact, bool, error)
+	GetArtifactByKey(context.Context, string, string) (Artifact, bool, error)
+	EnsureArtifact(context.Context, Artifact) (Artifact, error)
+}
+
 type EventStore interface {
 	ActorStore
+	ArtifactStore
 	CreateLane(context.Context, Lane) error
 	GetLane(context.Context, string) (Lane, bool, error)
 	FindLane(context.Context, string, string, string) (Lane, bool, error)
@@ -31,6 +39,7 @@ type EventStore interface {
 
 type CheckpointStore interface {
 	ActorStore
+	ArtifactStore
 	SaveCheckpoint(context.Context, int64, ProposedCheckpoint) (Checkpoint, error)
 	GetCheckpoint(context.Context, string) (Checkpoint, bool, error)
 	LoadLatestCheckpoint(context.Context, string) (Checkpoint, bool, error)

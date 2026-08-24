@@ -4,9 +4,13 @@ Language SDKs consume the same golden vectors to verify proposed-Event encoding 
 identity, and compare their exported Core type constants with `spec/vocabulary.json`. Adapter
 contract suites live beside their implementations.
 
+Core conformance fixtures also validate `model_call` and `tool_call` Attempt payloads against
+`spec/schemas/call-payload.schema.json`; aliases outside those profiles are not conformant.
+
 Store suites verify:
 
-- immutable Actor, Lane, Turn, Action, and Attempt ownership;
+- immutable Actor, Artifact, Lane, Turn, Action, and Attempt ownership;
+- unique Artifact `(key, version)` identity and conflict detection when its content locator changes;
 - unique `(action_id, attempt_no)` and globally unique Event/append IDs;
 - Lane-local `last_seq`, atomic append, optimistic concurrency, and idempotency;
 - `event_type` subject-prefix validation and same-Session causation;

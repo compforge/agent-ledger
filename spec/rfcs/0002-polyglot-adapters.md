@@ -75,9 +75,12 @@ Turn
   └── Action(model_call) → Attempt 1
 ```
 
-Actions are logical and retain the Effect fixed before their first Attempt. A provider or tool retry creates another Attempt under the same Action. A
-strict Adapter creates the Attempt and commits `attempt.requested` before physical execution, then
-commits `attempt.completed` or `attempt.failed` before the Harness consumes the outcome.
+Actions are logical and retain their caller-owned key and Effect across retries; a Core tool Action
+uses the Harness `tool_call_id` as `Action.key`. A provider or tool retry creates another Attempt
+under the same Action. Before every physical execution, a strict Adapter creates the Attempt and
+commits its complete `attempt.requested`; the first requested Attempt also marks the logical Action
+as started. The Adapter commits a Core terminal Attempt outcome before the Harness consumes the
+outcome.
 
 Harness work outside model and tool calls uses a concrete Action `type`, such as `compact` or
 `checkpoint`; `operation` is only the conceptual category, not a stored Action type.
@@ -124,10 +127,10 @@ Adapters follow the same semantic sequence even though their APIs differ:
 6. invoke the Harness native resume or continue API.
 
 An explicit resolution authorizes one physical retry of one unresolved Attempt, not the Action or
-Session indefinitely. The adapter records the caller's decision identifier in the new
-`attempt.requested` payload and terminalizes superseded Attempts as `outcome_unknown` before
-crossing the external execution boundary. If the new Attempt is also unresolved, recovery requires
-a new decision. These payload fields are caller-owned evidence; Core does not interpret them.
+Session indefinitely. The adapter records `recovery_decision_id` in the new `attempt.requested`
+payload and terminalizes superseded Attempts with `attempt.outcome_unknown` before crossing the
+external execution boundary. If the new Attempt is also unresolved, recovery requires a new
+decision. These identifiers are caller-owned evidence; Core does not interpret their values.
 
 Recovery may return a blocked or decision-required result. Starting execution is not proof that
 recovery was safe.

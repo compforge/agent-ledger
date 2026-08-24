@@ -22,9 +22,9 @@ async def test_model_hook_is_durable_before_call() -> None:
     recorder = await _recorder(store)
     turn = await recorder.start_turn()
 
-    attempt = await recorder.before_model_call(turn, payload={"model": "test"})
+    attempt = await recorder.before_model_call(turn, payload={"input": [], "model": {"id": "test"}})
     events_before_call = [event async for event in store.read_lane(recorder.lane.id)]
-    await recorder.model_completed(attempt, payload={"message": "done"})
+    await recorder.model_completed(attempt, payload={"output": "done"})
 
     assert [event.event_type for event in events_before_call] == [
         EventType.TURN_STARTED,
@@ -42,7 +42,11 @@ async def test_failed_prewrite_prevents_external_call() -> None:
     await recorder.store.create_turn(created)
     called = False
     with pytest.raises(StoreError):
-        await recorder.before_tool_call(created, payload={"name": "charge"})
+        await recorder.before_tool_call(
+            created,
+            action_key="charge-1",
+            payload={"tool_name": "charge", "input": {}},
+        )
         called = True
     assert not called
 
@@ -51,9 +55,11 @@ async def test_retry_keeps_action_and_increments_attempt_number() -> None:
     store = MemoryEventStore()
     recorder = await _recorder(store)
     turn = await recorder.start_turn()
-    first = await recorder.before_model_call(turn, payload={"model": "test"})
+    first = await recorder.before_model_call(turn, payload={"input": [], "model": {"id": "test"}})
     await recorder.model_failed(first, RuntimeError("limited"))
-    second = await recorder.retry(first.action_id, 2, payload={"model": "test"})
+    second = await recorder.retry(
+        first.action_id, 2, payload={"input": [], "model": {"id": "test"}}
+    )
 
     inspection = inspect_session(await store.load_session(recorder.session_id))
 
@@ -61,6 +67,39 @@ async def test_retry_keeps_action_and_increments_attempt_number() -> None:
     assert second.attempt_no == 2
     assert len(inspection.unresolved_attempts) == 1
     assert inspection.unresolved_attempts[0].attempt_id == second.attempt_id
+
+
+async def test_cancelled_and_unknown_outcomes_close_attempts() -> None:
+    store = MemoryEventStore()
+    recorder = await _recorder(store)
+    turn = await recorder.start_turn()
+    cancelled = await recorder.before_model_call(turn, payload={"input": []})
+    cancelled_event = await recorder.cancel_attempt(cancelled, reason="user_interrupt")
+    unknown = await recorder.before_tool_call(
+        turn,
+        action_key="tool-1",
+        payload={"tool_name": "write", "input": {}},
+    )
+    replacement = await recorder.retry(
+        unknown.action_id,
+        2,
+        payload={
+            "tool_name": "write",
+            "input": {},
+            "recovery_decision_id": "decision-1",
+        },
+    )
+    unknown_event = await recorder.mark_attempt_outcome_unknown(
+        unknown,
+        reason="worker_lost",
+        superseded_by_attempt_id=replacement.attempt_id,
+    )
+
+    inspection = inspect_session(await store.load_session(recorder.session_id))
+
+    assert cancelled_event.event_type == EventType.ATTEMPT_CANCELLED
+    assert unknown_event.event_type == EventType.ATTEMPT_OUTCOME_UNKNOWN
+    assert [item.attempt_id for item in inspection.unresolved_attempts] == [replacement.attempt_id]
 
 
 async def test_orchestrator_links_multiple_agent_runs() -> None:
@@ -105,10 +144,10 @@ async def test_plain_loop_profile_restores_snapshot_and_tail() -> None:
         PlainLoopContext(messages=[{"role": "user", "content": "hello"}]),
     )
     turn = await recorder.start_turn()
-    attempt = await recorder.before_model_call(turn, payload={"model": "test"})
+    attempt = await recorder.before_model_call(turn, payload={"input": [], "model": {"id": "test"}})
     await recorder.model_completed(
         attempt,
-        payload={"message": {"role": "assistant", "content": "hi"}},
+        payload={"output": {"role": "assistant", "content": "hi"}},
     )
     await recorder.complete_turn(turn)
 
@@ -140,7 +179,11 @@ async def test_checkpoint_link_and_run_completion_are_one_inspectable_append() -
     store = MemoryEventStore()
     recorder = await _recorder(store)
     turn = await recorder.start_turn()
-    unresolved = await recorder.before_tool_call(turn, payload={"tool": "charge"})
+    unresolved = await recorder.before_tool_call(
+        turn,
+        action_key="charge-1",
+        payload={"tool_name": "charge", "input": {}},
+    )
 
     checkpoint_linked = ProposedEvent(
         lane_id=recorder.lane.id,

@@ -43,6 +43,8 @@ const (
 	EventTypeAttemptRequested              = "attempt.requested"
 	EventTypeAttemptCompleted              = "attempt.completed"
 	EventTypeAttemptFailed                 = "attempt.failed"
+	EventTypeAttemptCancelled              = "attempt.cancelled"
+	EventTypeAttemptOutcomeUnknown         = "attempt.outcome_unknown"
 	EventTypeLaneFrameworkSnapshotSaved    = "lane.framework.snapshot.saved"
 	EventTypeLaneFrameworkCheckpointLinked = "lane.framework.checkpoint.linked"
 )
