@@ -32,7 +32,7 @@ func TestSQLiteStorePersistsExecutionModel(t *testing.T) {
 	actor := agentledger.NewActor("agent", "agentgo")
 	lane := agentledger.NewLane("session", "run", "main", "")
 	turn := agentledger.NewTurn(lane.ID)
-	action := agentledger.NewAction(turn.ID, "model_call", "")
+	action := agentledger.NewAction(turn.ID, "model_call", "model-1", "")
 	attempt := agentledger.NewAttempt(action.ID, 1)
 	creates := []struct {
 		label  string

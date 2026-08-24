@@ -26,6 +26,8 @@ type MemoryEventStore struct {
 	mu                sync.Mutex
 	actors            map[string]Actor
 	actorKeys         map[string]string
+	artifacts         map[string]Artifact
+	artifactKeys      map[string]string
 	lanes             map[string]Lane
 	laneNames         map[string]string
 	turns             map[string]Turn
@@ -42,6 +44,7 @@ type MemoryEventStore struct {
 func NewMemoryEventStore() *MemoryEventStore {
 	return &MemoryEventStore{
 		actors: make(map[string]Actor), actorKeys: make(map[string]string),
+		artifacts: make(map[string]Artifact), artifactKeys: make(map[string]string),
 		lanes: make(map[string]Lane), laneNames: make(map[string]string),
 		turns: make(map[string]Turn), actions: make(map[string]Action),
 		attempts: make(map[string]Attempt), attemptNumbers: make(map[string]struct{}),
@@ -49,6 +52,69 @@ func NewMemoryEventStore() *MemoryEventStore {
 		appends:     make(map[string]AppendReceipt),
 		checkpoints: make(map[string]Checkpoint), latestCheckpoints: make(map[string]string),
 	}
+}
+
+func (s *MemoryEventStore) CreateArtifact(ctx context.Context, artifact Artifact) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.artifacts[artifact.ID]; ok {
+		return fmt.Errorf("%w: artifact %s", ErrEntityConflict, artifact.ID)
+	}
+	identity := artifactIdentity(artifact.Key, artifact.Version)
+	if _, ok := s.artifactKeys[identity]; ok {
+		return fmt.Errorf("%w: artifact %s version %s", ErrEntityConflict, artifact.Key, artifact.Version)
+	}
+	s.artifacts[artifact.ID] = artifact
+	s.artifactKeys[identity] = artifact.ID
+	return nil
+}
+
+func (s *MemoryEventStore) GetArtifact(ctx context.Context, id string) (Artifact, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return Artifact{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, ok := s.artifacts[id]
+	return value, ok, nil
+}
+
+func (s *MemoryEventStore) GetArtifactByKey(ctx context.Context, key, version string) (Artifact, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return Artifact{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, ok := s.artifactKeys[artifactIdentity(key, version)]
+	if !ok {
+		return Artifact{}, false, nil
+	}
+	return s.artifacts[id], true, nil
+}
+
+func (s *MemoryEventStore) EnsureArtifact(ctx context.Context, artifact Artifact) (Artifact, error) {
+	if err := ctx.Err(); err != nil {
+		return Artifact{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	identity := artifactIdentity(artifact.Key, artifact.Version)
+	if id, ok := s.artifactKeys[identity]; ok {
+		stored := s.artifacts[id]
+		if stored.Key != artifact.Key || stored.Version != artifact.Version || stored.URI != artifact.URI || stored.SHA256 != artifact.SHA256 || stored.Size != artifact.Size || stored.ContentType != artifact.ContentType {
+			return Artifact{}, fmt.Errorf("%w: artifact %s version %s", ErrEntityConflict, artifact.Key, artifact.Version)
+		}
+		return stored, nil
+	}
+	if _, ok := s.artifacts[artifact.ID]; ok {
+		return Artifact{}, fmt.Errorf("%w: artifact %s", ErrEntityConflict, artifact.ID)
+	}
+	s.artifacts[artifact.ID] = artifact
+	s.artifactKeys[identity] = artifact.ID
+	return artifact, nil
 }
 
 func (s *MemoryEventStore) CreateActor(ctx context.Context, actor Actor) error {
@@ -300,6 +366,11 @@ func (s *MemoryEventStore) SaveCheckpoint(ctx context.Context, expectedRevision 
 	}
 	if _, ok := s.actors[proposed.ActorID]; !ok {
 		return Checkpoint{}, fmt.Errorf("%w: actor %s", ErrEntityNotFound, proposed.ActorID)
+	}
+	if proposed.ArtifactID != "" {
+		if _, ok := s.artifacts[proposed.ArtifactID]; !ok {
+			return Checkpoint{}, fmt.Errorf("%w: artifact %s", ErrEntityNotFound, proposed.ArtifactID)
+		}
 	}
 	actualRevision := int64(0)
 	if id := s.latestCheckpoints[proposed.Key]; id != "" {
@@ -583,6 +654,7 @@ func (s *MemoryEventStore) validSubject(lane Lane, event ProposedEvent) bool {
 func laneNameKey(sessionID, runID, name string) string {
 	return sessionID + "\x00" + runID + "\x00" + name
 }
+func artifactIdentity(key, version string) string { return key + "\x00" + version }
 func attemptNumberKey(actionID string, attemptNo int) string {
 	return fmt.Sprintf("%s\x00%d", actionID, attemptNo)
 }
@@ -605,8 +677,8 @@ func validateCheckpoint(value ProposedCheckpoint) error {
 	if value.SchemaVersion != "1.0" || value.ID == "" || value.Key == "" || value.ActorID == "" || value.Format == "" {
 		return errors.New("checkpoint requires schema version, id, key, actor, and format")
 	}
-	if (value.State == nil) == (value.ArtifactRef == nil) {
-		return errors.New("exactly one of state and artifact_ref must be set")
+	if (value.State == nil) == (value.ArtifactID == "") {
+		return errors.New("exactly one of state and artifact_id must be set")
 	}
 	if value.Anchor != nil && (value.Anchor.LaneID == "" || value.Anchor.LastAppliedSeq < 1 || value.Anchor.LastAppliedEventID == "") {
 		return errors.New("checkpoint anchor requires lane, positive seq, and event")

@@ -58,11 +58,23 @@ func TestToolMiddlewareRecordsActionAndAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(view.Turns) != 1 || len(view.Actions) != 1 || view.Actions[0].Type != "tool_call" || len(view.Attempts) != 1 {
+	if len(view.Turns) != 1 || len(view.Actions) != 1 || view.Actions[0].Type != "tool_call" || view.Actions[0].Key != call.ID || len(view.Attempts) != 1 {
 		t.Fatalf("session view = %#v", view)
 	}
 	if view.Actions[0].Effect != agentledger.UnknownEffect() {
 		t.Fatalf("tool effect = %#v", view.Actions[0].Effect)
+	}
+	for _, event := range view.Events {
+		switch event.EventType {
+		case agentledger.EventTypeAttemptRequested:
+			if _, ok := event.Payload["input"]; !ok || event.Payload["tool_name"] != call.Name {
+				t.Fatalf("tool request payload = %#v", event.Payload)
+			}
+		case agentledger.EventTypeAttemptCompleted:
+			if _, ok := event.Payload["output"]; !ok {
+				t.Fatalf("tool result payload = %#v", event.Payload)
+			}
+		}
 	}
 	assertAttemptLifecycle(t, view.Events)
 }
@@ -74,11 +86,13 @@ func TestToolMiddlewareRetriesOnlyWhenPolicyApprovesFixedEffect(t *testing.T) {
 	adapter, err := New(ctx, Config{
 		Store: store, SessionID: "session", RunID: "run", NativeSessionID: "native",
 		Actor: agentledger.NewActor("agent", "agentgo"), OperationTimeout: time.Second,
-		ToolEffect: func(agentgo.ToolCall) agentledger.Effect { return readEffect },
+		ToolSemantics: func(agentgo.ToolCall) ToolSemantics {
+			return ToolSemantics{Effect: readEffect}
+		},
 		CanRetryTool: func(action agentledger.Action, attempt agentledger.Attempt, call agentgo.ToolCall) ToolRetryDecision {
 			return ToolRetryDecision{
-				Approved: action.Effect == readEffect && attempt.AttemptNo == 1 && call.ID == "tool-1",
-				Metadata: map[string]any{"recovery_decision_id": "confirmation-1"},
+				Approved:           action.Effect == readEffect && attempt.AttemptNo == 1 && call.ID == "tool-1",
+				RecoveryDecisionID: "confirmation-1",
 			}
 		},
 	})
@@ -90,7 +104,9 @@ func TestToolMiddlewareRetriesOnlyWhenPolicyApprovesFixedEffect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adapter.beforeToolCall(ctx, turnID, call, map[string]any{"tool_call_id": call.ID}); err != nil {
+	if _, err := adapter.beforeToolCall(ctx, turnID, call, readEffect, map[string]any{
+		"tool_name": call.Name, "input": call.Args,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := adapter.ToolMiddleware()(ctx, call, func(context.Context, json.RawMessage) (json.RawMessage, error) {
@@ -108,17 +124,17 @@ func TestToolMiddlewareRetriesOnlyWhenPolicyApprovesFixedEffect(t *testing.T) {
 	if view.Actions[0].Effect != readEffect {
 		t.Fatalf("effect = %#v, want %#v", view.Actions[0].Effect, readEffect)
 	}
-	var oldFailed, retryRequested bool
+	var oldResolved, retryRequested bool
 	for _, event := range view.Events {
 		switch {
-		case event.EventType == agentledger.EventTypeAttemptFailed && event.SubjectID == view.Attempts[0].ID:
-			oldFailed = event.Payload["superseded_by_attempt_id"] == view.Attempts[1].ID
+		case event.EventType == agentledger.EventTypeAttemptOutcomeUnknown && event.SubjectID == view.Attempts[0].ID:
+			oldResolved = event.Payload["superseded_by_attempt_id"] == view.Attempts[1].ID
 		case event.EventType == agentledger.EventTypeAttemptRequested && event.SubjectID == view.Attempts[1].ID:
 			retryRequested = event.Payload["recovery_decision_id"] == "confirmation-1"
 		}
 	}
-	if !oldFailed || !retryRequested {
-		t.Fatalf("old_failed=%t retry_requested=%t events=%#v", oldFailed, retryRequested, view.Events)
+	if !oldResolved || !retryRequested {
+		t.Fatalf("old_resolved=%t retry_requested=%t events=%#v", oldResolved, retryRequested, view.Events)
 	}
 }
 
@@ -131,9 +147,80 @@ func TestToolMiddlewareDoesNotRetryUnresolvedActionByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adapter.beforeToolCall(ctx, turnID, call, map[string]any{"tool_call_id": call.ID}); err != nil {
+	if _, err := adapter.beforeToolCall(ctx, turnID, call, agentledger.UnknownEffect(), map[string]any{
+		"tool_name": call.Name, "input": call.Args,
+	}); err != nil {
 		t.Fatal(err)
 	}
+	called := false
+	_, err = adapter.ToolMiddleware()(ctx, call, func(context.Context, json.RawMessage) (json.RawMessage, error) {
+		called = true
+		return nil, nil
+	})
+	if err == nil || called {
+		t.Fatalf("err=%v called=%t", err, called)
+	}
+}
+
+func TestToolMiddlewareRejectsKeyedEffectWithoutEffectiveKey(t *testing.T) {
+	ctx := context.Background()
+	store := agentledger.NewMemoryEventStore()
+	adapter, err := New(ctx, Config{
+		Store: store, SessionID: "session", RunID: "run", NativeSessionID: "native",
+		Actor: agentledger.NewActor("agent", "agentgo"), OperationTimeout: time.Second,
+		ToolSemantics: func(agentgo.ToolCall) ToolSemantics {
+			return ToolSemantics{Effect: agentledger.Effect{
+				Kind: agentledger.EffectKindWrite, Idempotency: agentledger.IdempotencyKeyed,
+			}}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	_, err = adapter.ToolMiddleware()(ctx,
+		agentgo.ToolCall{ID: "tool-1", Name: "write", Args: json.RawMessage(`{}`)},
+		func(context.Context, json.RawMessage) (json.RawMessage, error) {
+			called = true
+			return nil, nil
+		},
+	)
+	if err == nil || called {
+		t.Fatalf("err=%v called=%t", err, called)
+	}
+}
+
+func TestToolMiddlewareRejectsChangedIdempotencyKeyOnRetry(t *testing.T) {
+	ctx := context.Background()
+	store := agentledger.NewMemoryEventStore()
+	key := "key-1"
+	effect := agentledger.Effect{
+		Kind: agentledger.EffectKindWrite, Idempotency: agentledger.IdempotencyKeyed,
+	}
+	adapter, err := New(ctx, Config{
+		Store: store, SessionID: "session", RunID: "run", NativeSessionID: "native",
+		Actor: agentledger.NewActor("agent", "agentgo"), OperationTimeout: time.Second,
+		ToolSemantics: func(agentgo.ToolCall) ToolSemantics {
+			return ToolSemantics{Effect: effect, IdempotencyKey: key}
+		},
+		CanRetryTool: func(agentledger.Action, agentledger.Attempt, agentgo.ToolCall) ToolRetryDecision {
+			return ToolRetryDecision{Approved: true}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := agentgo.ToolCall{ID: "tool-1", Name: "write", Args: json.RawMessage(`{}`)}
+	turnID, err := adapter.turnID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.beforeToolCall(ctx, turnID, call, effect, map[string]any{
+		"tool_name": call.Name, "input": call.Args, "idempotency_key": key,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key = "key-2"
 	called := false
 	_, err = adapter.ToolMiddleware()(ctx, call, func(context.Context, json.RawMessage) (json.RawMessage, error) {
 		called = true
@@ -161,6 +248,20 @@ func TestWrappedModelRecordsPhysicalAttempt(t *testing.T) {
 	wantEffect := agentledger.Effect{Kind: agentledger.EffectKindNone, Idempotency: agentledger.IdempotencyNotApplicable}
 	if view.Actions[0].Effect != wantEffect {
 		t.Fatalf("model effect = %#v, want %#v", view.Actions[0].Effect, wantEffect)
+	}
+	for _, event := range view.Events {
+		switch event.EventType {
+		case agentledger.EventTypeAttemptRequested:
+			model, _ := event.Payload["model"].(map[string]any)
+			if model["id"] != "test-model" || model["provider"] != "test-provider" {
+				t.Fatalf("model request payload = %#v", event.Payload)
+			}
+		case agentledger.EventTypeAttemptCompleted:
+			usage, _ := event.Payload["usage"].(map[string]any)
+			if event.Payload["finish_reason"] != "stop" || usage["input_tokens"] != float64(10) {
+				t.Fatalf("model result payload = %#v", event.Payload)
+			}
+		}
 	}
 	assertAttemptLifecycle(t, view.Events)
 }
@@ -194,7 +295,10 @@ type fakeModel struct{}
 
 func (fakeModel) Generate(context.Context, []agentgo.Message, []agentgo.ToolSpec, ...agentgo.CallOption) (*agentgo.LLMResponse, error) {
 	return &agentgo.LLMResponse{Message: agentgo.Message{
-		Role: agentgo.RoleAssistant, Content: []agentgo.ContentBlock{agentgo.TextBlock("done")}, Timestamp: time.Now(),
+		Role: agentgo.RoleAssistant, Content: []agentgo.ContentBlock{agentgo.TextBlock("done")},
+		StopReason: agentgo.StopReasonStop, Usage: &agentgo.Usage{
+			Provider: "actual-provider", Model: "actual-model", Input: 10, Output: 4, TotalTokens: 14,
+		}, Timestamp: time.Now(),
 	}}, nil
 }
 func (fakeModel) GenerateStream(context.Context, []agentgo.Message, []agentgo.ToolSpec, ...agentgo.CallOption) (<-chan agentgo.StreamEvent, error) {
@@ -202,7 +306,9 @@ func (fakeModel) GenerateStream(context.Context, []agentgo.Message, []agentgo.To
 	close(stream)
 	return stream, nil
 }
-func (fakeModel) SupportsTools() bool { return true }
+func (fakeModel) SupportsTools() bool  { return true }
+func (fakeModel) ProviderName() string { return "test-provider" }
+func (fakeModel) ModelName() string    { return "test-model" }
 
 type countingModel struct{ called bool }
 

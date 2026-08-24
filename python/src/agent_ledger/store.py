@@ -5,6 +5,7 @@ from agent_ledger.models import (
     Action,
     Actor,
     AppendReceipt,
+    Artifact,
     Attempt,
     Checkpoint,
     Lane,
@@ -27,7 +28,17 @@ class ActorStore(Protocol):
     async def ensure_actor(self, actor: Actor) -> Actor: ...
 
 
-class EventStore(ActorStore, Protocol):
+class ArtifactStore(Protocol):
+    async def create_artifact(self, artifact: Artifact) -> None: ...
+
+    async def get_artifact(self, artifact_id: str) -> Artifact | None: ...
+
+    async def get_artifact_by_key(self, key: str, version: str) -> Artifact | None: ...
+
+    async def ensure_artifact(self, artifact: Artifact) -> Artifact: ...
+
+
+class EventStore(ActorStore, ArtifactStore, Protocol):
     async def create_lane(self, lane: Lane) -> None: ...
 
     async def get_lane(self, lane_id: str) -> Lane | None: ...
@@ -65,7 +76,7 @@ class EventStore(ActorStore, Protocol):
     async def load_run(self, session_id: str, run_id: str) -> RunView: ...
 
 
-class CheckpointStore(ActorStore, Protocol):
+class CheckpointStore(ActorStore, ArtifactStore, Protocol):
     async def save_checkpoint(
         self,
         expected_revision: int,

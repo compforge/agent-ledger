@@ -65,7 +65,6 @@ def _project_run(
 ) -> dict[str, Any]:
     events = by_run[run_id]
     steps: list[dict[str, Any]] = []
-    attempt_requests: dict[str, StoredEvent] = {}
     tool_steps: dict[str, dict[str, Any]] = {}
     model_name = ""
 
@@ -81,20 +80,17 @@ def _project_run(
         action = actions[attempt.action_id]
         turn = turns[action.turn_id]
         if event.event_type == EventType.ATTEMPT_REQUESTED:
-            attempt_requests[attempt.id] = event
             if action.type == ActionType.MODEL_CALL:
-                model_name = str(event.payload.get("model", model_name))
+                model = event.payload.get("model")
+                if isinstance(model, dict) and isinstance(model.get("id"), str):
+                    model_name = model["id"]
             elif action.type == ActionType.TOOL_CALL:
                 target = _last_agent_step(steps, event, run_id, turn.id)
                 target.setdefault("tool_calls", []).append(
                     {
-                        "tool_call_id": str(event.payload.get("tool_call_id", attempt.id)),
-                        "function_name": str(
-                            event.payload.get("tool_name", event.payload.get("name", "unknown"))
-                        ),
-                        "arguments": _arguments(
-                            event.payload.get("arguments", event.payload.get("input", {}))
-                        ),
+                        "tool_call_id": action.key or action.id,
+                        "function_name": str(event.payload.get("tool_name", "unknown")),
+                        "arguments": _arguments(event.payload.get("input", {})),
                     }
                 )
                 tool_steps[attempt.id] = target
@@ -103,19 +99,23 @@ def _project_run(
         ):
             steps.append(_model_step(len(steps), event, run_id, turn.id, attempt.id))
         elif (
-            event.event_type in {EventType.ATTEMPT_COMPLETED, EventType.ATTEMPT_FAILED}
+            event.event_type
+            in {
+                EventType.ATTEMPT_COMPLETED,
+                EventType.ATTEMPT_FAILED,
+                EventType.ATTEMPT_CANCELLED,
+                EventType.ATTEMPT_OUTCOME_UNKNOWN,
+            }
             and action.type == ActionType.TOOL_CALL
         ):
             target = tool_steps.get(attempt.id) or _last_agent_step(steps, event, run_id, turn.id)
             observation = target.setdefault("observation", {"results": []})
-            result = event.payload.get("result", event.payload.get("error", ""))
-            request = attempt_requests.get(attempt.id)
-            tool_call_id = (
-                request.payload.get("tool_call_id", attempt.id) if request else attempt.id
+            result = event.payload.get(
+                "output", event.payload.get("error", event.payload.get("reason", ""))
             )
             observation["results"].append(
                 {
-                    "source_call_id": str(tool_call_id),
+                    "source_call_id": action.key or action.id,
                     "content": _content(result),
                     "extra": {
                         "ok": event.event_type == EventType.ATTEMPT_COMPLETED,
@@ -194,7 +194,7 @@ def _model_step(
     turn_id: str,
     attempt_id: str,
 ) -> dict[str, Any]:
-    message = event.payload.get("message", event.payload.get("output", ""))
+    message = event.payload.get("output", "")
     content = message.get("content", "") if isinstance(message, dict) else message
     usage = event.payload.get("usage", {})
     step: dict[str, Any] = {
@@ -212,12 +212,13 @@ def _model_step(
     }
     if isinstance(usage, dict):
         step["metrics"] = {
-            "prompt_tokens": int(usage.get("prompt_tokens", 0)),
-            "completion_tokens": int(usage.get("completion_tokens", 0)),
-            "cached_tokens": int(usage.get("cached_tokens", 0)),
+            "prompt_tokens": int(usage.get("input_tokens", 0)),
+            "completion_tokens": int(usage.get("output_tokens", 0)),
+            "cached_tokens": int(usage.get("cache_read_input_tokens", 0)),
         }
-    if "model" in event.payload:
-        step["model_name"] = str(event.payload["model"])
+    model = event.payload.get("model")
+    if isinstance(model, dict) and isinstance(model.get("id"), str):
+        step["model_name"] = model["id"]
     return step
 
 

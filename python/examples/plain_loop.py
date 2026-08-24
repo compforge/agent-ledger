@@ -17,10 +17,16 @@ async def main() -> None:
 
     await recorder.start_run(payload={"messages": [{"role": "user", "content": "hello"}]})
     turn = await recorder.start_turn()
-    attempt = await recorder.before_model_call(turn, payload={"model": "example-model"})
+    attempt = await recorder.before_model_call(
+        turn,
+        payload={
+            "model": {"id": "example-model"},
+            "input": [{"role": "user", "content": "hello"}],
+        },
+    )
     await recorder.model_completed(
         attempt,
-        payload={"message": {"role": "assistant", "content": "Hello!"}},
+        payload={"output": {"role": "assistant", "content": "Hello!"}},
     )
     await recorder.complete_turn(turn)
     await profile.save(

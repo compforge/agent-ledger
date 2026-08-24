@@ -12,16 +12,20 @@ async def test_atif_projection_uses_action_type_and_attempt_events() -> None:
     )
     await recorder.start_run(payload={"messages": [{"role": "user", "content": "hello"}]})
     turn = await recorder.start_turn()
-    model = await recorder.before_model_call(turn, payload={"model": "test-model"})
+    model = await recorder.before_model_call(
+        turn,
+        payload={"model": {"id": "test-model"}, "input": [{"role": "user"}]},
+    )
     await recorder.model_completed(
         model,
-        payload={"message": {"role": "assistant", "content": "checking"}},
+        payload={"output": {"role": "assistant", "content": "checking"}},
     )
     tool = await recorder.before_tool_call(
         turn,
-        payload={"tool_call_id": "call-1", "tool_name": "lookup", "arguments": {"q": "x"}},
+        action_key="call-1",
+        payload={"tool_name": "lookup", "input": {"q": "x"}},
     )
-    await recorder.tool_completed(tool, payload={"tool_call_id": "call-1", "result": "done"})
+    await recorder.tool_completed(tool, payload={"output": "done"})
 
     trajectories = project_atif(await store.load_session("session"))
 

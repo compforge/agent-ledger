@@ -17,6 +17,7 @@ from agent_ledger.models import (
     Action,
     Actor,
     AppendReceipt,
+    Artifact,
     Attempt,
     Checkpoint,
     Lane,
@@ -39,6 +40,8 @@ class MemoryEventStore:
         self._lock = asyncio.Lock()
         self._actors: dict[str, Actor] = {}
         self._actor_keys: dict[str, str] = {}
+        self._artifacts: dict[str, Artifact] = {}
+        self._artifact_keys: dict[tuple[str, str], str] = {}
         self._lanes: dict[str, Lane] = {}
         self._lane_names: dict[tuple[str, str, str], str] = {}
         self._turns: dict[str, Turn] = {}
@@ -88,6 +91,40 @@ class MemoryEventStore:
             self._actors[actor.id] = snapshot
             if actor.key is not None:
                 self._actor_keys[actor.key] = actor.id
+            return snapshot.model_copy(deep=True)
+
+    async def create_artifact(self, artifact: Artifact) -> None:
+        async with self._lock:
+            identity = (artifact.key, artifact.version)
+            if artifact.id in self._artifacts or identity in self._artifact_keys:
+                raise EntityConflict("artifact", artifact.id)
+            self._artifacts[artifact.id] = artifact.model_copy(deep=True)
+            self._artifact_keys[identity] = artifact.id
+
+    async def get_artifact(self, artifact_id: str) -> Artifact | None:
+        async with self._lock:
+            artifact = self._artifacts.get(artifact_id)
+            return artifact.model_copy(deep=True) if artifact is not None else None
+
+    async def get_artifact_by_key(self, key: str, version: str) -> Artifact | None:
+        async with self._lock:
+            artifact_id = self._artifact_keys.get((key, version))
+            artifact = self._artifacts.get(artifact_id) if artifact_id is not None else None
+            return artifact.model_copy(deep=True) if artifact is not None else None
+
+    async def ensure_artifact(self, artifact: Artifact) -> Artifact:
+        async with self._lock:
+            identity = (artifact.key, artifact.version)
+            artifact_id = self._artifact_keys.get(identity)
+            stored = self._artifacts.get(artifact_id) if artifact_id is not None else None
+            if stored is not None:
+                _require_same_artifact(stored, artifact)
+                return stored.model_copy(deep=True)
+            if artifact.id in self._artifacts:
+                raise EntityConflict("artifact", artifact.id)
+            snapshot = artifact.model_copy(deep=True)
+            self._artifacts[artifact.id] = snapshot
+            self._artifact_keys[identity] = artifact.id
             return snapshot.model_copy(deep=True)
 
     async def create_lane(self, lane: Lane) -> None:
@@ -183,6 +220,8 @@ class MemoryEventStore:
                 return previous.model_copy(deep=True)
             if checkpoint.actor_id not in self._actors:
                 raise EntityNotFound("actor", checkpoint.actor_id)
+            if checkpoint.artifact_id is not None and checkpoint.artifact_id not in self._artifacts:
+                raise EntityNotFound("artifact", checkpoint.artifact_id)
             latest = self._latest_checkpoints.get(checkpoint.key)
             actual_revision = latest.revision if latest is not None else 0
             if actual_revision != expected_revision:
@@ -358,3 +397,15 @@ def _require_same_actor(stored: Actor, proposed: Actor) -> None:
         or stored.framework != proposed.framework
     ):
         raise EntityConflict("actor key", proposed.key or proposed.id)
+
+
+def _require_same_artifact(stored: Artifact, proposed: Artifact) -> None:
+    if (
+        stored.key != proposed.key
+        or stored.version != proposed.version
+        or stored.uri != proposed.uri
+        or stored.sha256 != proposed.sha256
+        or stored.size != proposed.size
+        or stored.content_type != proposed.content_type
+    ):
+        raise EntityConflict("artifact key/version", f"{proposed.key}:{proposed.version}")

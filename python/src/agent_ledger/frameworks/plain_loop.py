@@ -115,15 +115,13 @@ def _apply_event(
     if action is None:
         return
     if action.type == ActionType.MODEL_CALL:
-        model_message = event.payload.get("message")
+        model_message = event.payload.get("output")
         if isinstance(model_message, dict):
             context.messages.append(model_message)
         elif model_message is not None:
             context.messages.append({"role": "assistant", "content": model_message})
     elif action.type == ActionType.TOOL_CALL:
-        result = event.payload.get("result")
+        result = event.payload.get("output")
         if result is not None:
             tool_message: dict[str, Any] = {"role": "tool", "content": result}
-            if "tool_call_id" in event.payload:
-                tool_message["tool_call_id"] = event.payload["tool_call_id"]
             context.messages.append(tool_message)

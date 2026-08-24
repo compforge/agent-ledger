@@ -18,6 +18,8 @@ import (
 var (
 	actorsBucket          = []byte("actors")
 	actorKeysBucket       = []byte("actor_keys")
+	artifactsBucket       = []byte("artifacts")
+	artifactKeysBucket    = []byte("artifact_keys")
 	lanesBucket           = []byte("lanes")
 	laneNamesBucket       = []byte("lane_names")
 	turnsBucket           = []byte("turns")
@@ -144,6 +146,100 @@ func (s *Store) EnsureActor(ctx context.Context, actor agentledger.Actor) (agent
 			}
 		}
 		stored = actor
+		return nil
+	})
+	return stored, err
+}
+
+func (s *Store) CreateArtifact(ctx context.Context, artifact agentledger.Artifact) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		artifacts, err := tx.CreateBucketIfNotExists(artifactsBucket)
+		if err != nil {
+			return err
+		}
+		keys, err := tx.CreateBucketIfNotExists(artifactKeysBucket)
+		if err != nil {
+			return err
+		}
+		identity := composite(artifact.Key, artifact.Version)
+		if artifacts.Get([]byte(artifact.ID)) != nil || keys.Get(identity) != nil {
+			return fmt.Errorf("%w: artifact %s", agentledger.ErrEntityConflict, artifact.ID)
+		}
+		if err := putJSON(artifacts, artifact.ID, artifact); err != nil {
+			return err
+		}
+		return keys.Put(identity, []byte(artifact.ID))
+	})
+}
+
+func (s *Store) GetArtifact(ctx context.Context, id string) (agentledger.Artifact, bool, error) {
+	return get[agentledger.Artifact](ctx, s.db, artifactsBucket, id)
+}
+
+func (s *Store) GetArtifactByKey(ctx context.Context, key, version string) (agentledger.Artifact, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return agentledger.Artifact{}, false, err
+	}
+	var artifact agentledger.Artifact
+	var found bool
+	err := s.db.View(func(tx *bolt.Tx) error {
+		keys := tx.Bucket(artifactKeysBucket)
+		if keys == nil {
+			return nil
+		}
+		id := keys.Get(composite(key, version))
+		if id == nil {
+			return nil
+		}
+		var err error
+		artifact, found, err = bucketGet[agentledger.Artifact](tx.Bucket(artifactsBucket), string(id))
+		return err
+	})
+	return artifact, found, err
+}
+
+func (s *Store) EnsureArtifact(ctx context.Context, artifact agentledger.Artifact) (agentledger.Artifact, error) {
+	var stored agentledger.Artifact
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		artifacts, err := tx.CreateBucketIfNotExists(artifactsBucket)
+		if err != nil {
+			return err
+		}
+		keys, err := tx.CreateBucketIfNotExists(artifactKeysBucket)
+		if err != nil {
+			return err
+		}
+		identity := composite(artifact.Key, artifact.Version)
+		lookupID := artifact.ID
+		if id := keys.Get(identity); id != nil {
+			lookupID = string(id)
+		}
+		if existing, ok, getErr := bucketGet[agentledger.Artifact](artifacts, lookupID); getErr != nil {
+			return getErr
+		} else if ok {
+			if existing.Key != artifact.Key || existing.Version != artifact.Version || existing.URI != artifact.URI ||
+				existing.SHA256 != artifact.SHA256 || existing.Size != artifact.Size || existing.ContentType != artifact.ContentType {
+				return fmt.Errorf("%w: artifact %s version %s", agentledger.ErrEntityConflict, artifact.Key, artifact.Version)
+			}
+			stored = existing
+			return nil
+		}
+		if artifacts.Get([]byte(artifact.ID)) != nil {
+			return fmt.Errorf("%w: artifact %s", agentledger.ErrEntityConflict, artifact.ID)
+		}
+		if err := putJSON(artifacts, artifact.ID, artifact); err != nil {
+			return err
+		}
+		if err := keys.Put(identity, []byte(artifact.ID)); err != nil {
+			return err
+		}
+		stored = artifact
 		return nil
 	})
 	return stored, err
@@ -334,6 +430,9 @@ func (s *Store) SaveCheckpoint(ctx context.Context, expectedRevision int64, prop
 		}
 		if !bucketHas(tx.Bucket(actorsBucket), proposed.ActorID) {
 			return fmt.Errorf("%w: actor %s", agentledger.ErrEntityNotFound, proposed.ActorID)
+		}
+		if proposed.ArtifactID != "" && !bucketHas(tx.Bucket(artifactsBucket), proposed.ArtifactID) {
+			return fmt.Errorf("%w: artifact %s", agentledger.ErrEntityNotFound, proposed.ArtifactID)
 		}
 		actualRevision := int64(0)
 		if latestID := heads.Get([]byte(proposed.Key)); latestID != nil {
@@ -815,8 +914,8 @@ func validateCheckpoint(value agentledger.ProposedCheckpoint) error {
 	if value.SchemaVersion != "1.0" || value.ID == "" || value.Key == "" || value.ActorID == "" || value.Format == "" {
 		return errors.New("checkpoint requires schema version, id, key, actor, and format")
 	}
-	if (value.State == nil) == (value.ArtifactRef == nil) {
-		return errors.New("exactly one of state and artifact_ref must be set")
+	if (value.State == nil) == (value.ArtifactID == "") {
+		return errors.New("exactly one of state and artifact_id must be set")
 	}
 	if value.Anchor != nil && (value.Anchor.LaneID == "" || value.Anchor.LastAppliedSeq < 1 || value.Anchor.LastAppliedEventID == "") {
 		return errors.New("checkpoint anchor requires lane, positive seq, and event")

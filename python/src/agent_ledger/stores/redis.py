@@ -23,6 +23,7 @@ from agent_ledger.models import (
     Action,
     Actor,
     AppendReceipt,
+    Artifact,
     Attempt,
     Checkpoint,
     Lane,
@@ -228,6 +229,55 @@ class RedisEventStore:
             _require_same_actor(stored, actor)
             return stored
 
+    async def create_artifact(self, artifact: Artifact) -> None:
+        result = await self._run_script(
+            self._create_actor_script,
+            [self._key("artifacts"), self._key("artifact-keys")],
+            [
+                artifact.id,
+                _artifact_identity(artifact.key, artifact.version),
+                artifact.model_dump_json(),
+            ],
+            "Redis artifact creation",
+        )
+        if _decode(result) != "ok":
+            raise EntityConflict("artifact", artifact.id)
+
+    async def get_artifact(self, artifact_id: str) -> Artifact | None:
+        return cast(Artifact | None, await self._get_model("artifacts", artifact_id, Artifact))
+
+    async def get_artifact_by_key(self, key: str, version: str) -> Artifact | None:
+        try:
+            artifact_id = await asyncio.wait_for(
+                cast(
+                    Awaitable[Any],
+                    self._client.hget(self._key("artifact-keys"), _artifact_identity(key, version)),
+                ),
+                timeout=self._operation_timeout,
+            )
+        except TimeoutError as error:
+            raise StoreError("Redis artifact lookup timed out") from error
+        except RedisError as error:
+            raise StoreError("Redis artifact lookup failed") from error
+        if artifact_id is None:
+            return None
+        return await self.get_artifact(_decode(artifact_id))
+
+    async def ensure_artifact(self, artifact: Artifact) -> Artifact:
+        stored = await self.get_artifact_by_key(artifact.key, artifact.version)
+        if stored is not None:
+            _require_same_artifact(stored, artifact)
+            return stored
+        try:
+            await self.create_artifact(artifact)
+            return artifact
+        except EntityConflict:
+            stored = await self.get_artifact_by_key(artifact.key, artifact.version)
+            if stored is None:
+                raise
+            _require_same_artifact(stored, artifact)
+            return stored
+
     async def create_lane(self, lane: Lane) -> None:
         if lane.last_seq != 0:
             raise ValueError("a new lane must have last_seq 0")
@@ -317,6 +367,11 @@ class RedisEventStore:
             raise ValueError("expected_revision must be non-negative")
         if await self.get_actor(checkpoint.actor_id) is None:
             raise EntityNotFound("actor", checkpoint.actor_id)
+        if (
+            checkpoint.artifact_id is not None
+            and await self.get_artifact(checkpoint.artifact_id) is None
+        ):
+            raise EntityNotFound("artifact", checkpoint.artifact_id)
         if checkpoint.anchor is not None:
             event = await self._get_model(
                 "events", checkpoint.anchor.last_applied_event_id, StoredEvent
@@ -625,6 +680,10 @@ def _lane_name_key(session_id: str, run_id: str, name: str) -> str:
     return _hash(f"{session_id}\x00{run_id}\x00{name}")
 
 
+def _artifact_identity(key: str, version: str) -> str:
+    return _hash(f"{key}\x00{version}")
+
+
 def _require_same_actor(stored: Actor, proposed: Actor) -> None:
     if (
         stored.key != proposed.key
@@ -632,6 +691,18 @@ def _require_same_actor(stored: Actor, proposed: Actor) -> None:
         or stored.framework != proposed.framework
     ):
         raise EntityConflict("actor key", proposed.key or proposed.id)
+
+
+def _require_same_artifact(stored: Artifact, proposed: Artifact) -> None:
+    if (
+        stored.key != proposed.key
+        or stored.version != proposed.version
+        or stored.uri != proposed.uri
+        or stored.sha256 != proposed.sha256
+        or stored.size != proposed.size
+        or stored.content_type != proposed.content_type
+    ):
+        raise EntityConflict("artifact key/version", f"{proposed.key}:{proposed.version}")
 
 
 def _hash(value: str) -> str:

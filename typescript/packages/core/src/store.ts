@@ -3,6 +3,7 @@ import type {
   Actor,
   AppendReceipt,
   Attempt,
+  Artifact,
   Checkpoint,
   Lane,
   ProposedEvent,
@@ -20,7 +21,14 @@ export interface ActorStore {
   ensureActor(actor: Actor): Promise<Actor>;
 }
 
-export interface EventStore extends ActorStore {
+export interface ArtifactStore {
+  createArtifact(artifact: Artifact): Promise<void>;
+  getArtifact(id: string): Promise<Artifact | undefined>;
+  getArtifactByKey(key: string, version: string): Promise<Artifact | undefined>;
+  ensureArtifact(artifact: Artifact): Promise<Artifact>;
+}
+
+export interface EventStore extends ActorStore, ArtifactStore {
   createLane(lane: Lane): Promise<void>;
   getLane(id: string): Promise<Lane | undefined>;
   findLane(sessionId: string, runId: string, name: string): Promise<Lane | undefined>;
@@ -36,7 +44,7 @@ export interface EventStore extends ActorStore {
   loadRun(sessionId: string, runId: string): Promise<RunView>;
 }
 
-export interface CheckpointStore extends ActorStore {
+export interface CheckpointStore extends ActorStore, ArtifactStore {
   saveCheckpoint(expectedRevision: number, checkpoint: ProposedCheckpoint): Promise<Checkpoint>;
   getCheckpoint(id: string): Promise<Checkpoint | undefined>;
   loadLatestCheckpoint(key: string): Promise<Checkpoint | undefined>;

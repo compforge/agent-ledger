@@ -3,6 +3,7 @@ package agentledger
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -14,9 +15,10 @@ func testStoreContract(t *testing.T, store EventStore) {
 	t.Helper()
 	ctx := context.Background()
 	actor := NewActorWithKey("test/agent", "agent", "plain-loop")
+	artifact := NewArtifact("model/request", "v1", "s3://artifacts/model-request-v1", strings.Repeat("0", 64), 42, "application/json")
 	lane := NewLane("session-1", "run-1", "main", "")
 	turn := NewTurn(lane.ID)
-	action := NewAction(turn.ID, "model_call", "")
+	action := NewAction(turn.ID, "model_call", "model-1", "")
 	attempt := NewAttempt(action.ID, 1)
 
 	creates := []struct {
@@ -24,6 +26,7 @@ func testStoreContract(t *testing.T, store EventStore) {
 		create func() error
 	}{
 		{"actor", func() error { return store.CreateActor(ctx, actor) }},
+		{"artifact", func() error { return store.CreateArtifact(ctx, artifact) }},
 		{"lane", func() error { return store.CreateLane(ctx, lane) }},
 		{"turn", func() error { return store.CreateTurn(ctx, turn) }},
 		{"action", func() error { return store.CreateAction(ctx, action) }},
@@ -46,6 +49,23 @@ func testStoreContract(t *testing.T, store EventStore) {
 	changed := NewActorWithKey(actor.Key, actor.Type, "other-framework")
 	if _, err := store.EnsureActor(ctx, changed); !errors.Is(err, ErrEntityConflict) {
 		t.Fatalf("ensure changed actor error = %v, want entity conflict", err)
+	}
+	byArtifactKey, ok, err := store.GetArtifactByKey(ctx, artifact.Key, artifact.Version)
+	if err != nil || !ok || byArtifactKey.ID != artifact.ID {
+		t.Fatalf("artifact by key/version = %#v, %v", byArtifactKey, err)
+	}
+	restartedArtifact := NewArtifact(artifact.Key, artifact.Version, artifact.URI, artifact.SHA256, artifact.Size, artifact.ContentType)
+	ensuredArtifact, err := store.EnsureArtifact(ctx, restartedArtifact)
+	if err != nil || ensuredArtifact.ID != artifact.ID {
+		t.Fatalf("ensure artifact = %#v, %v", ensuredArtifact, err)
+	}
+	changedArtifact := NewArtifact(artifact.Key, artifact.Version, "s3://artifacts/different", artifact.SHA256, artifact.Size, artifact.ContentType)
+	if _, err := store.EnsureArtifact(ctx, changedArtifact); !errors.Is(err, ErrEntityConflict) {
+		t.Fatalf("ensure changed artifact error = %v, want entity conflict", err)
+	}
+	secondArtifact := NewArtifact(artifact.Key, "v2", artifact.URI+"-v2", artifact.SHA256, artifact.Size, artifact.ContentType)
+	if _, err := store.EnsureArtifact(ctx, secondArtifact); err != nil {
+		t.Fatalf("ensure second artifact version: %v", err)
 	}
 	event := NewEvent("attempt.requested", lane.ID, attempt.ID, actor)
 	event.Payload = map[string]any{"model": "test"}
@@ -73,6 +93,9 @@ func testStoreContract(t *testing.T, store EventStore) {
 	}
 	if len(view.Actors) != 1 || len(view.Lanes) != 1 || len(view.Turns) != 1 || len(view.Actions) != 1 || len(view.Attempts) != 1 || len(view.Events) != 1 {
 		t.Fatalf("incomplete session view: %#v", view)
+	}
+	if view.Actions[0].Key != action.Key {
+		t.Fatalf("action key = %q, want %q", view.Actions[0].Key, action.Key)
 	}
 }
 
@@ -164,19 +187,80 @@ func TestLaneRecorderCreatesAttemptsForRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := recorder.BeforeModelCall(ctx, turn.ID, nil)
+	first, err := recorder.BeforeModelCall(ctx, turn.ID, map[string]any{"input": []any{}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := recorder.ModelFailed(ctx, first, errors.New("timeout")); err != nil {
 		t.Fatal(err)
 	}
-	second, err := recorder.Retry(ctx, first.ActionID, 2, nil)
+	second, err := recorder.Retry(ctx, first.ActionID, 2, map[string]any{"input": []any{}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.ActionID != second.ActionID || first.AttemptID == second.AttemptID || second.AttemptNo != 2 {
 		t.Fatalf("retry handles = %#v %#v", first, second)
+	}
+	view, err := store.LoadRun(ctx, "session", "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var starts, requests int
+	for _, event := range view.Events {
+		if event.EventType == EventTypeActionStarted {
+			starts++
+		}
+		if event.EventType == EventTypeAttemptRequested {
+			requests++
+		}
+	}
+	if starts != 0 || requests != 2 {
+		t.Fatalf("starts=%d requests=%d", starts, requests)
+	}
+}
+
+func TestAttemptCancellationAndUnknownOutcomeAreTerminal(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryEventStore()
+	recorder, err := OpenRecorder(ctx, RecorderOptions{
+		Store: store, SessionID: "session", RunID: "run", Actor: NewActor("agent", "plain-loop"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := recorder.StartTurn(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := recorder.BeforeModelCall(ctx, turn.ID, map[string]any{"input": []any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.CancelAttempt(ctx, cancelled, "user_interrupt"); err != nil {
+		t.Fatal(err)
+	}
+	unknown, err := recorder.BeforeToolCall(ctx, turn.ID, "tool-1", map[string]any{
+		"tool_name": "write", "input": map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := recorder.Retry(ctx, unknown.ActionID, 2, map[string]any{
+		"tool_name": "write", "input": map[string]any{}, "recovery_decision_id": "decision-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.MarkAttemptOutcomeUnknown(ctx, unknown, "worker_lost", replacement.AttemptID); err != nil {
+		t.Fatal(err)
+	}
+	view, err := store.LoadRun(ctx, "session", "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unresolved := InspectRun(view).UnresolvedAttempts
+	if len(unresolved) != 1 || unresolved[0].AttemptID != replacement.AttemptID {
+		t.Fatalf("unresolved attempts = %#v", unresolved)
 	}
 }
 
@@ -194,7 +278,9 @@ func TestRunCompletionLinksCheckpointAtomicallyAndRemainsInspectable(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	unresolved, err := recorder.BeforeToolCall(ctx, turn.ID, map[string]any{"tool": "charge"})
+	unresolved, err := recorder.BeforeToolCall(ctx, turn.ID, "charge-1", map[string]any{
+		"tool_name": "charge", "input": map[string]any{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -41,6 +41,29 @@ Session and Run identities come from the upstream system. Agent Ledger treats `r
 stable containment key and does not create authoritative Session or Run rows. Ledger-owned Actor,
 Lane, Turn, Action, Attempt, Event, and append receipt identifiers are UUIDv7 values.
 
+### Fact ledger and structure ledger
+
+The model deliberately keeps two complementary accounts:
+
+- Events are the append-only fact ledger: the authoritative account of what happened and in what
+  Lane order. This is the core and highest-volume dataset.
+- Session/Run identity and the Lane → Turn → Action → Attempt hierarchy form the structure ledger.
+  Lane, Turn, Action, and Attempt rows materialize that containment so readers do not have to infer
+  the execution tree by replaying and joining only Events.
+
+The same system could theoretically be represented with Events alone, but ownership validation,
+recovery queries, trajectory projection, and navigation would all become contextual replay
+problems. The structure ledger is therefore a compact index over durable execution identity, not a
+second source of lifecycle truth: mutable status still comes from Events.
+
+Because Events dominate storage volume, immutable identity, containment, and recovery semantics
+live once on their structural subject where appropriate. An Event references the relevant
+granularity through `subject_id` and records the fact specific to that occurrence instead of
+copying the subject's Run, Lane, Turn, Action, or Effect fields into every row. This normalization
+does not move concrete execution data out of an Attempt merely to save bytes: each physical
+request and outcome remains self-contained in its Attempt Events, while large bodies use Artifact
+references.
+
 ## Layer boundary
 
 - an agent harness records turns, actions, attempts, outcomes, and links to framework-native state;
@@ -54,11 +77,36 @@ Lane, Turn, Action, Attempt, Event, and append receipt identifiers are UUIDv7 va
 The Ledger does not own an agent loop, construct a universal harness context, decide whether a
 result is correct, or activate learned prompts, tools, or skills.
 
+A managed-agent API may project model spans from model Attempts, tool-use and message output from
+their canonical payloads, and recovery diagnostics from unresolved Attempts. Queued user input,
+session status such as idle or rescheduled, permission state such as requires-action, and ephemeral
+stream deltas remain host or Harness state. A tool proposed by a model but not yet approved is part
+of the completed model output and native Harness state; `attempt.requested` begins only when the
+physical tool execution is ready to cross its write-before-execute boundary.
+
 ## Entity contract
 
 Lane ownership is immutable: one Lane belongs to exactly one `(session_id, run_id)`. A Turn belongs
 to one Lane, an Action belongs to one Turn, and an Attempt belongs to one Action. `parent_lane_id`
 and `parent_action_id` express optional structural relationships without changing ownership.
+`Action.key` is an optional caller-owned identity for logical work; for a Core `tool_call`, adapters
+store the Harness-visible `tool_call_id` there rather than repeating it on every Attempt Event.
+
+The Action/Attempt boundary follows two questions:
+
+- Action answers “which logical work is this, and what recovery semantics remain fixed?” It owns
+  identity and containment (`type`, `key`, parent), plus the immutable `Effect` used by recovery
+  policy.
+- Attempt answers “what exact physical execution was requested, and what outcome was observed?” Its
+  Events carry the complete model/tool request, provider or external-operation identifiers, result,
+  usage, error, cancellation, and unknown-outcome facts.
+
+A field does not move to Action merely because retries normally repeat it. `tool_name`, model/tool
+input, requested model, `client_request_id`, and `idempotency_key` describe a concrete outbound
+request and therefore belong to `attempt.requested`; each Attempt remains independently auditable.
+Cross-Attempt rules are invariants over those requests—for example keyed idempotency requires every
+retry to repeat the first Attempt's effective key. In contrast, `tool_call_id` names the logical
+tool use itself and therefore belongs in `Action.key`.
 
 Entity tables describe identity and containment, not lifecycle status. Actor rows hold stable
 `type`, optional `framework`, and an optional upstream `key` so the high-volume Event table only
@@ -69,12 +117,16 @@ cancelled, checkpointed, and reconciled are immutable Events. `Lane.last_seq` pr
 ordering. Checkpoint revisions are immutable; a backend may maintain a mutable latest pointer as an
 index over them.
 
-Public `key` fields are caller-owned lookup identities. `Actor.key` and `Checkpoint.key` are opaque
+Public `key` fields are caller-owned lookup identities. `Actor.key`, `Artifact.key`, `Action.key`,
+and `Checkpoint.key` are opaque
 strings to Ledger: Ledger stores and compares the complete value but does not derive, parse,
 normalize, or assign business meaning to it. A caller may use a namespaced composite value such as
 `system:tenant:agent:version` to preserve every dimension it needs for later lookup; the delimiter
-and individual segments remain entirely caller-defined. `Actor.key` resolves one stable Actor,
-while `Checkpoint.key` groups revisions of one caller-defined recoverable instance.
+and individual segments remain entirely caller-defined. `Actor.key` resolves one stable Actor;
+`Artifact.key` names one logical artifact while its caller-owned opaque `version` selects an exact,
+immutable row; `Action.key` identifies caller-defined logical work; and `Checkpoint.key` groups
+revisions of one caller-defined recoverable instance. Ledger compares Artifact versions but does
+not parse them, choose a latest version, or model a version graph.
 
 SQL schemas intentionally omit foreign-key constraints. Stores MUST validate logical ownership on
 writes. This keeps migration, archival, partitioning, and cross-database operation independent from
@@ -112,10 +164,14 @@ causality.
 
 `payload` contains fact-specific data. `extensions` contains namespaced framework, vendor, or
 application additions outside the core contract. Readers MUST preserve unknown Event types,
-payload fields, and extensions.
+payload fields, and extensions. Core payload profiles standardize portable fields without turning
+the Store into a contextual validator: validating a Core call payload requires resolving the
+subject Action type, and remains a producer and conformance responsibility.
 
-Large inputs and outputs SHOULD use an `ArtifactRef`. An application-selected Artifact Store owns
-the bytes; the Event keeps their digest, media type, size, and URI.
+Large inputs and outputs SHOULD first be registered as an `Artifact`. Each row is one immutable
+version identified by a Ledger-owned `id` and a caller-owned `(key, version)` pair. Ledger stores
+the content URI, digest, media type, and size; an application-selected Content Store owns the
+bytes. Events and Checkpoints retain only `artifact_id`.
 
 ## Core vocabulary
 
@@ -143,8 +199,70 @@ whether a caller retries an Action. Extension Action types use the same Core Eff
 
 Core lifecycle Event types are `session.started/completed`, `run.started/completed/failed/cancelled`,
 `lane.created`, `turn.started/completed/failed`, `action.started/completed/failed`, and
-`attempt.requested/completed/failed`. The standard framework-state Events are
+`attempt.requested/completed/failed/cancelled/outcome_unknown`. The standard framework-state Events are
 `lane.framework.snapshot.saved` and `lane.framework.checkpoint.linked`.
+`action.started` is reserved for extension Actions whose lifecycle begins independently of an
+Attempt; Core model/tool calls use their first `attempt.requested` as the start fact.
+
+## Core call payload profiles
+
+`spec/schemas/call-payload.schema.json` is the normative field-level contract for Core
+`model_call` and `tool_call` Attempt Events. Payloads use one canonical shape across Harnesses;
+provider, framework, and application fields belong in Event `extensions` rather than alternate
+payload aliases.
+
+Large request and result bodies use the same inline-or-reference rule in both profiles: exactly one
+of `input` / `input_artifact_id` or `output` / `output_artifact_id` is present. The inline value may
+be any JSON value, including `null`. The referenced form identifies an existing immutable Artifact
+version.
+
+### Model calls
+
+| Event | Standard payload |
+| --- | --- |
+| `attempt.requested` | `input` or `input_artifact_id`; optional requested `model {id, provider}` and caller-generated `client_request_id` |
+| `attempt.completed` | `output` or `output_artifact_id`; optional actual `model`, open `finish_reason`, normalized `usage`, and `provider_request_id` |
+| `attempt.failed` | structured `error`; optional actual `model`, partial `usage`, and `provider_request_id` |
+
+The requested and actual model may differ when a gateway routes aliases or performs fallback.
+`client_request_id` is fixed and persisted before one physical request; when the provider accepts
+that caller identifier, it can also be used to reconcile an unresolved Attempt. A retry is another
+Attempt and normally receives another client request identifier.
+`usage` uses provider-neutral token fields: `input_tokens`, `output_tokens`,
+`cache_read_input_tokens`, `cache_write_input_tokens`, and `total_tokens`. Missing fields mean the
+producer did not observe them; zero means an observed zero.
+
+### Tool calls
+
+| Event | Standard payload |
+| --- | --- |
+| `attempt.requested` | `tool_name` and `input` or `input_artifact_id`; optional `idempotency_key` and `recovery_decision_id`; `Action.key` stores `tool_call_id` |
+| `attempt.completed` | `output` or `output_artifact_id`; optional `external_operation_id` for later reconciliation |
+| `attempt.failed` | structured `error`; optional `external_operation_id` |
+
+`Action.key` identifies the Harness-visible logical tool request and remains the same across
+Attempts. When an Action declares `Effect.idempotency = keyed`, its first
+`attempt.requested` MUST contain the effective `idempotency_key`, and retries MUST reuse it.
+`recovery_decision_id` identifies the one caller decision that authorized a retry after an unknown
+outcome; it does not grant permission to later retries.
+
+All Core failure payloads use `error {type, message, code?, retryable?}`. `type` is a stable
+machine-oriented classification; `message` is the human-readable diagnostic. `retryable` reports
+an observed provider or tool property and is not a recovery decision.
+
+### Attempt terminal outcomes
+
+`attempt.completed` records a known successful outcome and `attempt.failed` a known failed outcome.
+`attempt.cancelled` records a confirmed cancellation and carries `reason`. Cancellation and
+unknown-outcome payloads may retain an observed `provider_request_id` or `external_operation_id` for
+later audit and reconciliation. A caller MUST use
+`attempt.outcome_unknown`, not `attempt.cancelled`, when it cannot prove whether an external
+operation took effect; its payload carries `reason` and may identify a
+`superseded_by_attempt_id`.
+
+All four Events are terminal for that physical Attempt. A requested Attempt without one of them is
+unresolved. `attempt.outcome_unknown` closes the old bookkeeping lifecycle after an explicit
+recovery decision without pretending that the external outcome is known.
 
 The Core payload of `lane.framework.checkpoint.linked` identifies the exact persisted Checkpoint
 with `checkpoint_id`, the recovery binding with `profile` and `profile_version`, and optional
@@ -191,14 +309,17 @@ order.
 
 ## Write-before-execute
 
-For a model or tool Action, an adapter first fixes the Action Effect, then creates an Attempt and
-durably appends `attempt.requested` before invoking the external operation. It appends
-`attempt.completed` or `attempt.failed` before the harness advances.
+For a model or tool call, an adapter first creates the logical Action with its key and fixed Effect,
+then creates an Attempt and durably appends `attempt.requested` before the external operation. The
+first requested Attempt is also the observable start of that Action; emitting a separate
+`action.started` would duplicate the same fact. Retries append another Attempt and its complete
+request. The adapter appends a terminal Attempt outcome before the harness advances.
 
 A requested Attempt without a terminal Event is unresolved after a crash. Recovery may query the
-provider, apply a known completed result, abandon the old Attempt and create the next `attempt_no`,
-or ask for human resolution. An unresolved `write` without known idempotency, or any `unknown`
-Effect, MUST NOT be silently retried.
+provider, apply a known outcome, or ask for human resolution. After an explicit decision to retry,
+the producer records the old Attempt as `attempt.outcome_unknown` and creates the next
+`attempt_no`. An unresolved `write` without known idempotency, or any `unknown` Effect, MUST NOT be
+silently retried.
 
 ## Framework recovery
 
@@ -213,7 +334,7 @@ restore native checkpoint
 
 The framework adapter owns checkpoint encoding, `format` compatibility, restoration, replay into
 native context, and unresolved-Attempt policy. The Store treats state as opaque JSON or an
-`ArtifactRef`. Normalized Events alone are not claimed to rebuild contexts containing branches,
+`artifact_id` pointing to one immutable Artifact version. Normalized Events alone are not claimed to rebuild contexts containing branches,
 compaction state, queues, custom messages, or opaque checkpoints. RFC 0002 defines this adapter
 boundary; `docs/checkpoint.md` defines the save and anchor contract.
 

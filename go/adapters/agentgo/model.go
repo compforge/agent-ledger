@@ -18,7 +18,7 @@ func (m *recordingModel) Generate(ctx context.Context, messages []agentgo.Messag
 	if err != nil {
 		return nil, err
 	}
-	attempt, err := m.adapter.runtimeRecorder.BeforeModelCall(ctx, turnID, modelPayload(messages, tools))
+	attempt, err := m.adapter.runtimeRecorder.BeforeModelCall(ctx, turnID, m.modelRequestPayload(messages, tools))
 	if err != nil {
 		return nil, fmt.Errorf("record agentgo model request: %w", err)
 	}
@@ -29,7 +29,7 @@ func (m *recordingModel) Generate(ctx context.Context, messages []agentgo.Messag
 		}
 		return nil, callErr
 	}
-	if err := m.adapter.runtimeRecorder.ModelCompleted(ctx, attempt, map[string]any{"message": response.Message}); err != nil {
+	if err := m.adapter.runtimeRecorder.ModelCompleted(ctx, attempt, m.modelResultPayload(response.Message)); err != nil {
 		return nil, fmt.Errorf("record agentgo model result: %w", err)
 	}
 	return response, nil
@@ -40,7 +40,7 @@ func (m *recordingModel) GenerateStream(ctx context.Context, messages []agentgo.
 	if err != nil {
 		return nil, err
 	}
-	attempt, err := m.adapter.runtimeRecorder.BeforeModelCall(ctx, turnID, modelPayload(messages, tools))
+	attempt, err := m.adapter.runtimeRecorder.BeforeModelCall(ctx, turnID, m.modelRequestPayload(messages, tools))
 	if err != nil {
 		return nil, fmt.Errorf("record agentgo model request: %w", err)
 	}
@@ -58,7 +58,7 @@ func (m *recordingModel) GenerateStream(ctx context.Context, messages []agentgo.
 		for event := range source {
 			if event.Type == agentgo.StreamEventDone {
 				terminal = true
-				if err := m.adapter.runtimeRecorder.ModelCompleted(ctx, attempt, map[string]any{"message": event.Message}); err != nil {
+				if err := m.adapter.runtimeRecorder.ModelCompleted(ctx, attempt, m.modelResultPayload(event.Message)); err != nil {
 					event = agentgo.StreamEvent{Type: agentgo.StreamEventError, Err: fmt.Errorf("record agentgo model result: %w", err)}
 				}
 			} else if event.Type == agentgo.StreamEventError {
@@ -107,10 +107,47 @@ func (m *recordingModel) ModelName() string {
 	return ""
 }
 
-func modelPayload(messages []agentgo.Message, tools []agentgo.ToolSpec) map[string]any {
-	toolNames := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		toolNames = append(toolNames, tool.Name)
+func (m *recordingModel) modelRequestPayload(messages []agentgo.Message, tools []agentgo.ToolSpec) map[string]any {
+	payload := map[string]any{"input": map[string]any{"messages": messages, "tools": tools}}
+	if model := modelIdentity(m.ProviderName(), m.ModelName()); model != nil {
+		payload["model"] = model
 	}
-	return map[string]any{"messages": messages, "tools": toolNames}
+	return payload
+}
+
+func (m *recordingModel) modelResultPayload(message agentgo.Message) map[string]any {
+	payload := map[string]any{"output": message}
+	if message.StopReason != "" {
+		payload["finish_reason"] = string(message.StopReason)
+	}
+	provider, modelName := m.ProviderName(), m.ModelName()
+	if message.Usage != nil {
+		if message.Usage.Provider != "" {
+			provider = message.Usage.Provider
+		}
+		if message.Usage.Model != "" {
+			modelName = message.Usage.Model
+		}
+		payload["usage"] = map[string]any{
+			"input_tokens": message.Usage.Input, "output_tokens": message.Usage.Output,
+			"cache_read_input_tokens":  message.Usage.CacheRead,
+			"cache_write_input_tokens": message.Usage.CacheWrite,
+			"total_tokens":             message.Usage.TotalTokens,
+		}
+	}
+	if model := modelIdentity(provider, modelName); model != nil {
+		payload["model"] = model
+	}
+	return payload
+}
+
+func modelIdentity(provider, modelName string) map[string]any {
+	if modelName == "" {
+		return nil
+	}
+	model := map[string]any{"id": modelName}
+	if provider != "" {
+		model["provider"] = provider
+	}
+	return model
 }

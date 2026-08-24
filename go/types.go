@@ -58,6 +58,7 @@ type Action struct {
 	ID             string `json:"id"`
 	TurnID         string `json:"turn_id"`
 	Type           string `json:"type"`
+	Key            string `json:"key,omitempty"`
 	ParentActionID string `json:"parent_action_id,omitempty"`
 	Effect         Effect `json:"effect"`
 	CreatedAt      string `json:"created_at"`
@@ -70,11 +71,15 @@ type Attempt struct {
 	CreatedAt string `json:"created_at"`
 }
 
-type ArtifactRef struct {
+type Artifact struct {
+	ID          string `json:"id"`
+	Key         string `json:"key"`
+	Version     string `json:"version"`
 	URI         string `json:"uri"`
 	SHA256      string `json:"sha256"`
 	Size        int64  `json:"size"`
 	ContentType string `json:"content_type"`
+	CreatedAt   string `json:"created_at"`
 }
 
 type CheckpointAnchor struct {
@@ -90,7 +95,7 @@ type ProposedCheckpoint struct {
 	ActorID       string            `json:"actor_id"`
 	Format        string            `json:"format"`
 	State         map[string]any    `json:"state,omitempty"`
-	ArtifactRef   *ArtifactRef      `json:"artifact_ref,omitempty"`
+	ArtifactID    string            `json:"artifact_id,omitempty"`
 	Anchor        *CheckpointAnchor `json:"anchor,omitempty"`
 	Extensions    map[string]any    `json:"extensions"`
 }
@@ -244,19 +249,26 @@ func NewTurn(laneID string) Turn {
 	return Turn{ID: NewID(), LaneID: laneID, CreatedAt: now()}
 }
 
-func NewAction(turnID, actionType, parentActionID string) Action {
-	return NewActionWithEffect(turnID, actionType, parentActionID, UnknownEffect())
+func NewAction(turnID, actionType, key, parentActionID string) Action {
+	return NewActionWithEffect(turnID, actionType, key, parentActionID, UnknownEffect())
 }
 
-func NewActionWithEffect(turnID, actionType, parentActionID string, effect Effect) Action {
+func NewActionWithEffect(turnID, actionType, key, parentActionID string, effect Effect) Action {
 	return Action{
-		ID: NewID(), TurnID: turnID, Type: actionType, ParentActionID: parentActionID,
+		ID: NewID(), TurnID: turnID, Type: actionType, Key: key, ParentActionID: parentActionID,
 		Effect: NormalizeEffect(effect), CreatedAt: now(),
 	}
 }
 
 func NewAttempt(actionID string, attemptNo int) Attempt {
 	return Attempt{ID: NewID(), ActionID: actionID, AttemptNo: attemptNo, CreatedAt: now()}
+}
+
+func NewArtifact(key, version, uri, sha256 string, size int64, contentType string) Artifact {
+	return Artifact{
+		ID: NewID(), Key: key, Version: version, URI: uri, SHA256: sha256, Size: size,
+		ContentType: contentType, CreatedAt: now(),
+	}
 }
 
 func NewCheckpoint(key, actorID, format string, state map[string]any) ProposedCheckpoint {

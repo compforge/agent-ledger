@@ -36,17 +36,6 @@
     "uuidV7": {
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-    },
-    "artifact_ref": {
-      "type": "object",
-      "required": ["uri", "sha256", "size", "content_type"],
-      "properties": {
-        "uri": { "type": "string", "minLength": 1 },
-        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-        "size": { "type": "integer", "minimum": 0 },
-        "content_type": { "type": "string", "minLength": 1 }
-      },
-      "additionalProperties": false
     }
   }
 }

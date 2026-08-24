@@ -33,7 +33,7 @@ Checkpoint key
 | `revision` | Store 分配的单调版本；首个版本为 1 |
 | `actor_id` | 产生该状态的 Actor |
 | `format` | Adapter 解释的不透明格式，例如 `application/vnd.compforge.agentgo.message+json;version=1` |
-| `state` / `artifact_ref` | 二选一；小状态内联为 JSON，大状态引用 Artifact Store |
+| `state` / `artifact_id` | 二选一；小状态内联为 JSON，大状态引用已注册的不可变 Artifact 版本 |
 | `anchor` | 可选的 Ledger 恢复位置 |
 | `extensions` | 不影响 Core 语义的扩展信息 |
 
@@ -75,7 +75,7 @@ lane_id + last_applied_seq + last_applied_event_id
 - 后续保存必须携带当前 revision，成功后返回 revision + 1。
 - 同一个 `id` 与相同内容重复提交时返回原结果，不产生新 revision。
 - 同一个 `id` 携带不同内容时是幂等冲突。
-- `state` 和 `artifact_ref` 必须且只能设置一个。
+- `state` 和 `artifact_id` 必须且只能设置一个；`artifact_id` 必须指向已存在的 Artifact。
 
 Checkpoint revision 一经保存不可修改。Checkpoint 的保留与垃圾回收可以采用独立策略；这不改变
 Event Ledger 的 append-only 语义。

@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/call-payload.schema.json",
+  "title": "Agent Ledger Core Call Payload Profiles",
+  "$defs": {
+    "artifact_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "model": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "provider": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "cache_read_input_tokens": { "type": "integer", "minimum": 0 },
+        "cache_write_input_tokens": { "type": "integer", "minimum": 0 },
+        "total_tokens": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "required": ["type", "message"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "message": { "type": "string" },
+        "code": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "model_call_attempt_requested": {
+      "type": "object",
+      "properties": {
+        "model": { "$ref": "#/$defs/model" },
+        "input": {},
+        "input_artifact_id": { "$ref": "#/$defs/artifact_id" },
+        "client_request_id": { "type": "string", "minLength": 1 }
+      },
+      "oneOf": [
+        { "required": ["input"], "not": { "required": ["input_artifact_id"] } },
+        { "required": ["input_artifact_id"], "not": { "required": ["input"] } }
+      ],
+      "additionalProperties": false
+    },
+    "model_call_completed": {
+      "type": "object",
+      "properties": {
+        "model": { "$ref": "#/$defs/model" },
+        "output": {},
+        "output_artifact_id": { "$ref": "#/$defs/artifact_id" },
+        "finish_reason": { "type": "string", "minLength": 1 },
+        "usage": { "$ref": "#/$defs/usage" },
+        "provider_request_id": { "type": "string", "minLength": 1 }
+      },
+      "oneOf": [
+        { "required": ["output"], "not": { "required": ["output_artifact_id"] } },
+        { "required": ["output_artifact_id"], "not": { "required": ["output"] } }
+      ],
+      "additionalProperties": false
+    },
+    "model_call_failed": {
+      "type": "object",
+      "required": ["error"],
+      "properties": {
+        "error": { "$ref": "#/$defs/error" },
+        "model": { "$ref": "#/$defs/model" },
+        "usage": { "$ref": "#/$defs/usage" },
+        "provider_request_id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "tool_call_attempt_requested": {
+      "type": "object",
+      "required": ["tool_name"],
+      "properties": {
+        "tool_name": { "type": "string", "minLength": 1 },
+        "input": {},
+        "input_artifact_id": { "$ref": "#/$defs/artifact_id" },
+        "idempotency_key": { "type": "string", "minLength": 1 },
+        "recovery_decision_id": { "type": "string", "minLength": 1 }
+      },
+      "oneOf": [
+        { "required": ["input"], "not": { "required": ["input_artifact_id"] } },
+        { "required": ["input_artifact_id"], "not": { "required": ["input"] } }
+      ],
+      "additionalProperties": false
+    },
+    "tool_call_completed": {
+      "type": "object",
+      "properties": {
+        "output": {},
+        "output_artifact_id": { "$ref": "#/$defs/artifact_id" },
+        "external_operation_id": { "type": "string", "minLength": 1 }
+      },
+      "oneOf": [
+        { "required": ["output"], "not": { "required": ["output_artifact_id"] } },
+        { "required": ["output_artifact_id"], "not": { "required": ["output"] } }
+      ],
+      "additionalProperties": false
+    },
+    "tool_call_failed": {
+      "type": "object",
+      "required": ["error"],
+      "properties": {
+        "error": { "$ref": "#/$defs/error" },
+        "external_operation_id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "attempt_cancelled": {
+      "type": "object",
+      "required": ["reason"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1 },
+        "provider_request_id": { "type": "string", "minLength": 1 },
+        "external_operation_id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "attempt_outcome_unknown": {
+      "type": "object",
+      "required": ["reason"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1 },
+        "provider_request_id": { "type": "string", "minLength": 1 },
+        "external_operation_id": { "type": "string", "minLength": 1 },
+        "superseded_by_attempt_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

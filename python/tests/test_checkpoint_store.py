@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 
 from agent_ledger import (
     Actor,
-    ArtifactRef,
+    Artifact,
     CheckpointAnchor,
     CheckpointConflict,
     CheckpointIdempotencyViolation,
@@ -97,21 +97,25 @@ async def test_checkpoint_can_reference_an_artifact(event_store: EventStore) -> 
     store: CheckpointStore = event_store  # type: ignore[assignment]
     actor = Actor(type="harness", framework="test")
     await store.create_actor(actor)
+    artifact = Artifact(
+        key="checkpoint/native-session",
+        version="v1",
+        uri="memory://checkpoint/v1",
+        sha256="0" * 64,
+        size=1024,
+        content_type="application/json",
+    )
+    await store.create_artifact(artifact)
     checkpoint = ProposedCheckpoint(
         key="large-native-session",
         actor_id=actor.id,
         format="application/vnd.compforge.test.state+json;version=1",
-        artifact_ref=ArtifactRef(
-            uri="memory://checkpoint",
-            sha256="0" * 64,
-            size=1024,
-            content_type="application/json",
-        ),
+        artifact_id=artifact.id,
     )
 
     saved = await store.save_checkpoint(0, checkpoint)
 
-    assert saved.artifact_ref == checkpoint.artifact_ref
+    assert saved.artifact_id == artifact.id
     assert saved.state is None
 
 

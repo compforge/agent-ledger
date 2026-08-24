@@ -35,6 +35,7 @@ from agent_ledger.models import (
     Action,
     Actor,
     AppendReceipt,
+    Artifact,
     Attempt,
     Checkpoint,
     CheckpointAnchor,
@@ -88,6 +89,22 @@ class _Actor(_Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class _Artifact(_Base):
+    __tablename__ = "ledger_artifacts"
+    __table_args__ = (
+        UniqueConstraint("artifact_key", "version", name="uq_ledger_artifacts_key_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    artifact_key: Mapped[str] = mapped_column(String(_ID_LENGTH), nullable=False)
+    version: Mapped[str] = mapped_column(String(_ID_LENGTH), nullable=False)
+    uri: Mapped[str] = mapped_column(String(2048), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class _Turn(_Base):
     __tablename__ = "ledger_turns"
     __table_args__ = (Index("ix_ledger_turns_lane", "lane_id"),)
@@ -101,12 +118,14 @@ class _Action(_Base):
     __tablename__ = "ledger_actions"
     __table_args__ = (
         Index("ix_ledger_actions_turn", "turn_id"),
+        Index("ix_ledger_actions_key", "action_key"),
         Index("ix_ledger_actions_parent", "parent_action_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     turn_id: Mapped[str] = mapped_column(String(36), nullable=False)
     type: Mapped[str] = mapped_column(String(_ID_LENGTH), nullable=False)
+    action_key: Mapped[str | None] = mapped_column(String(_ID_LENGTH), nullable=True)
     parent_action_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     effect_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
     effect_idempotency: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
@@ -180,7 +199,7 @@ class _Checkpoint(_Base):
     actor_id: Mapped[str] = mapped_column(String(36), nullable=False)
     format: Mapped[str] = mapped_column(String(255), nullable=False)
     state: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    artifact_ref: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    artifact_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     lane_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     last_applied_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_applied_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
@@ -249,6 +268,47 @@ class SqlEventStore:
             if stored is None:
                 raise
             _require_same_actor(stored, actor)
+            return stored
+
+    async def create_artifact(self, artifact: Artifact) -> None:
+        async def operation(session: AsyncSession) -> None:
+            session.add(_artifact_row(artifact))
+
+        await self._create("artifact", artifact.id, operation)
+
+    async def get_artifact(self, artifact_id: str) -> Artifact | None:
+        row = await self._get(_Artifact, artifact_id)
+        return _artifact_model(row) if row is not None else None
+
+    async def get_artifact_by_key(self, key: str, version: str) -> Artifact | None:
+        try:
+            async with asyncio.timeout(self._operation_timeout):
+                async with AsyncSession(self._engine) as session:
+                    row = await session.scalar(
+                        select(_Artifact).where(
+                            _Artifact.artifact_key == key,
+                            _Artifact.version == version,
+                        )
+                    )
+                    return _artifact_model(row) if row is not None else None
+        except TimeoutError as error:
+            raise StoreError("SQL artifact lookup timed out") from error
+        except SQLAlchemyError as error:
+            raise StoreError("SQL artifact lookup failed") from error
+
+    async def ensure_artifact(self, artifact: Artifact) -> Artifact:
+        stored = await self.get_artifact_by_key(artifact.key, artifact.version)
+        if stored is not None:
+            _require_same_artifact(stored, artifact)
+            return stored
+        try:
+            await self.create_artifact(artifact)
+            return artifact
+        except EntityConflict:
+            stored = await self.get_artifact_by_key(artifact.key, artifact.version)
+            if stored is None:
+                raise
+            _require_same_artifact(stored, artifact)
             return stored
 
     async def create_lane(self, lane: Lane) -> None:
@@ -351,6 +411,11 @@ class SqlEventStore:
                             return stored
                         if await session.get(_Actor, checkpoint.actor_id) is None:
                             raise EntityNotFound("actor", checkpoint.actor_id)
+                        if (
+                            checkpoint.artifact_id is not None
+                            and await session.get(_Artifact, checkpoint.artifact_id) is None
+                        ):
+                            raise EntityNotFound("artifact", checkpoint.artifact_id)
                         latest = await session.scalar(
                             select(_Checkpoint)
                             .where(_Checkpoint.checkpoint_key == checkpoint.key)
@@ -765,14 +830,28 @@ def _actor_row(value: Actor) -> _Actor:
     )
 
 
+def _artifact_row(value: Artifact) -> _Artifact:
+    return _Artifact(
+        id=value.id,
+        artifact_key=value.key,
+        version=value.version,
+        uri=value.uri,
+        sha256=value.sha256,
+        size=value.size,
+        content_type=value.content_type,
+        created_at=value.created_at,
+    )
+
+
 def _turn_row(value: Turn) -> _Turn:
     return _Turn(**value.model_dump())
 
 
 def _action_row(value: Action) -> _Action:
-    data = value.model_dump(exclude={"effect"})
+    data = value.model_dump(exclude={"effect", "key"})
     return _Action(
         **data,
+        action_key=value.key,
         effect_kind=value.effect.kind.value,
         effect_idempotency=value.effect.idempotency.value,
     )
@@ -796,9 +875,7 @@ def _checkpoint_row(value: Checkpoint) -> _Checkpoint:
         actor_id=value.actor_id,
         format=value.format,
         state=value.state,
-        artifact_ref=value.artifact_ref.model_dump(mode="json")
-        if value.artifact_ref is not None
-        else None,
+        artifact_id=value.artifact_id,
         lane_id=anchor.lane_id if anchor is not None else None,
         last_applied_seq=anchor.last_applied_seq if anchor is not None else None,
         last_applied_event_id=anchor.last_applied_event_id if anchor is not None else None,
@@ -829,6 +906,19 @@ def _actor_model(row: _Actor) -> Actor:
     )
 
 
+def _artifact_model(row: _Artifact) -> Artifact:
+    return Artifact(
+        id=row.id,
+        key=row.artifact_key,
+        version=row.version,
+        uri=row.uri,
+        sha256=row.sha256,
+        size=row.size,
+        content_type=row.content_type,
+        created_at=_aware(row.created_at),
+    )
+
+
 def _require_same_actor(stored: Actor, proposed: Actor) -> None:
     if (
         stored.key != proposed.key
@@ -836,6 +926,18 @@ def _require_same_actor(stored: Actor, proposed: Actor) -> None:
         or stored.framework != proposed.framework
     ):
         raise EntityConflict("actor key", proposed.key or proposed.id)
+
+
+def _require_same_artifact(stored: Artifact, proposed: Artifact) -> None:
+    if (
+        stored.key != proposed.key
+        or stored.version != proposed.version
+        or stored.uri != proposed.uri
+        or stored.sha256 != proposed.sha256
+        or stored.size != proposed.size
+        or stored.content_type != proposed.content_type
+    ):
+        raise EntityConflict("artifact key/version", f"{proposed.key}:{proposed.version}")
 
 
 def _turn_model(row: _Turn) -> Turn:
@@ -847,6 +949,7 @@ def _action_model(row: _Action) -> Action:
         id=row.id,
         turn_id=row.turn_id,
         type=row.type,
+        key=row.action_key,
         parent_action_id=row.parent_action_id,
         effect=Effect(
             kind=EffectKind(row.effect_kind),
@@ -905,7 +1008,7 @@ def _checkpoint_model(row: _Checkpoint) -> Checkpoint:
             "actor_id": row.actor_id,
             "format": row.format,
             "state": row.state,
-            "artifact_ref": row.artifact_ref,
+            "artifact_id": row.artifact_id,
             "anchor": anchor,
             "extensions": row.extensions,
             "created_at": _aware(row.created_at),

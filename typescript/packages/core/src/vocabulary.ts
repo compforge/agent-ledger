@@ -45,6 +45,8 @@ export const EventType = {
   ATTEMPT_REQUESTED: "attempt.requested",
   ATTEMPT_COMPLETED: "attempt.completed",
   ATTEMPT_FAILED: "attempt.failed",
+  ATTEMPT_CANCELLED: "attempt.cancelled",
+  ATTEMPT_OUTCOME_UNKNOWN: "attempt.outcome_unknown",
   LANE_FRAMEWORK_SNAPSHOT_SAVED: "lane.framework.snapshot.saved",
   LANE_FRAMEWORK_CHECKPOINT_LINKED: "lane.framework.checkpoint.linked",
 } as const;

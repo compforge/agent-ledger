@@ -104,7 +104,8 @@ func unresolvedAttempts(view RunView) []UnresolvedAttempt {
 				AttemptID: attempt.ID, AttemptNo: attempt.AttemptNo,
 				RequestedEventID: event.ID,
 			}
-		case EventTypeAttemptCompleted, EventTypeAttemptFailed:
+		case EventTypeAttemptCompleted, EventTypeAttemptFailed,
+			EventTypeAttemptCancelled, EventTypeAttemptOutcomeUnknown:
 			delete(open, attempt.ID)
 		}
 	}

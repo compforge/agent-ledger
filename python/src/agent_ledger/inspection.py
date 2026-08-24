@@ -162,6 +162,11 @@ def _unresolved_attempts(view: SessionView | RunView) -> tuple[UnresolvedAttempt
                 attempt_no=attempt.attempt_no,
                 requested_event_id=event.id,
             )
-        elif event.event_type in {EventType.ATTEMPT_COMPLETED, EventType.ATTEMPT_FAILED}:
+        elif event.event_type in {
+            EventType.ATTEMPT_COMPLETED,
+            EventType.ATTEMPT_FAILED,
+            EventType.ATTEMPT_CANCELLED,
+            EventType.ATTEMPT_OUTCOME_UNKNOWN,
+        }:
             open_attempts.pop(attempt.id, None)
     return tuple(open_attempts.values())

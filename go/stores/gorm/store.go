@@ -33,7 +33,7 @@ func (s *Store) Initialize(ctx context.Context) error {
 	ctx, cancel := s.withTimeout(ctx)
 	defer cancel()
 	return s.db.WithContext(ctx).AutoMigrate(
-		&actorRow{}, &laneRow{}, &turnRow{}, &actionRow{}, &attemptRow{}, &eventRow{}, &appendRow{}, &checkpointRow{},
+		&actorRow{}, &artifactRow{}, &laneRow{}, &turnRow{}, &actionRow{}, &attemptRow{}, &eventRow{}, &appendRow{}, &checkpointRow{},
 	)
 }
 
@@ -103,6 +103,69 @@ func (s *Store) findActorIdentity(ctx context.Context, actor agentledger.Actor) 
 func sameActorIdentity(stored, proposed agentledger.Actor) (agentledger.Actor, error) {
 	if stored.Key != proposed.Key || stored.Type != proposed.Type || stored.Framework != proposed.Framework {
 		return agentledger.Actor{}, fmt.Errorf("%w: actor key %s", agentledger.ErrEntityConflict, proposed.Key)
+	}
+	return stored, nil
+}
+
+func (s *Store) CreateArtifact(ctx context.Context, artifact agentledger.Artifact) error {
+	return s.create(ctx, "artifact", artifact.ID, artifactToRow(artifact))
+}
+
+func (s *Store) GetArtifact(ctx context.Context, id string) (agentledger.Artifact, bool, error) {
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+	var row artifactRow
+	result := s.db.WithContext(ctx).First(&row, "id = ?", id)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return agentledger.Artifact{}, false, nil
+	}
+	if result.Error != nil {
+		return agentledger.Artifact{}, false, result.Error
+	}
+	return row.toModel(), true, nil
+}
+
+func (s *Store) GetArtifactByKey(ctx context.Context, key, version string) (agentledger.Artifact, bool, error) {
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+	var row artifactRow
+	result := s.db.WithContext(ctx).First(&row, "artifact_key = ? AND version = ?", key, version)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return agentledger.Artifact{}, false, nil
+	}
+	if result.Error != nil {
+		return agentledger.Artifact{}, false, result.Error
+	}
+	return row.toModel(), true, nil
+}
+
+func (s *Store) EnsureArtifact(ctx context.Context, artifact agentledger.Artifact) (agentledger.Artifact, error) {
+	stored, exists, err := s.GetArtifactByKey(ctx, artifact.Key, artifact.Version)
+	if err != nil {
+		return agentledger.Artifact{}, err
+	}
+	if exists {
+		return sameArtifactIdentity(stored, artifact)
+	}
+	if err := s.CreateArtifact(ctx, artifact); err == nil {
+		return artifact, nil
+	} else if !errors.Is(err, agentledger.ErrEntityConflict) {
+		return agentledger.Artifact{}, err
+	}
+	stored, exists, err = s.GetArtifactByKey(ctx, artifact.Key, artifact.Version)
+	if err != nil {
+		return agentledger.Artifact{}, err
+	}
+	if !exists {
+		return agentledger.Artifact{}, fmt.Errorf("%w: artifact %s", agentledger.ErrEntityConflict, artifact.ID)
+	}
+	return sameArtifactIdentity(stored, artifact)
+}
+
+func sameArtifactIdentity(stored, proposed agentledger.Artifact) (agentledger.Artifact, error) {
+	if stored.Key != proposed.Key || stored.Version != proposed.Version || stored.URI != proposed.URI ||
+		stored.SHA256 != proposed.SHA256 || stored.Size != proposed.Size || stored.ContentType != proposed.ContentType {
+		return agentledger.Artifact{}, fmt.Errorf("%w: artifact %s version %s", agentledger.ErrEntityConflict, proposed.Key, proposed.Version)
 	}
 	return stored, nil
 }
@@ -301,6 +364,9 @@ func (s *Store) SaveCheckpoint(ctx context.Context, expectedRevision int64, prop
 		}
 		if !rowExists[actorRow](tx, proposed.ActorID) {
 			return fmt.Errorf("%w: actor %s", agentledger.ErrEntityNotFound, proposed.ActorID)
+		}
+		if proposed.ArtifactID != "" && !rowExists[artifactRow](tx, proposed.ArtifactID) {
+			return fmt.Errorf("%w: artifact %s", agentledger.ErrEntityNotFound, proposed.ArtifactID)
 		}
 		var latest checkpointRow
 		result = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -760,6 +826,19 @@ type actorRow struct {
 
 func (actorRow) TableName() string { return "ledger_actors" }
 
+type artifactRow struct {
+	ID          string    `gorm:"column:id;type:char(36);primaryKey"`
+	ArtifactKey string    `gorm:"column:artifact_key;type:varchar(191);not null;uniqueIndex:uq_ledger_artifacts_key_version"`
+	Version     string    `gorm:"column:version;type:varchar(191);not null;uniqueIndex:uq_ledger_artifacts_key_version"`
+	URI         string    `gorm:"column:uri;type:varchar(2048);not null"`
+	SHA256      string    `gorm:"column:sha256;type:char(64);not null"`
+	Size        int64     `gorm:"column:size;not null"`
+	ContentType string    `gorm:"column:content_type;type:varchar(255);not null"`
+	CreatedAt   time.Time `gorm:"column:created_at;not null"`
+}
+
+func (artifactRow) TableName() string { return "ledger_artifacts" }
+
 type laneRow struct {
 	ID           string    `gorm:"column:id;type:char(36);primaryKey"`
 	SessionID    string    `gorm:"column:session_id;type:varchar(191);not null;uniqueIndex:uq_ledger_lanes_owner_name;index:ix_ledger_lanes_owner"`
@@ -784,6 +863,7 @@ type actionRow struct {
 	ID             string    `gorm:"column:id;type:char(36);primaryKey"`
 	TurnID         string    `gorm:"column:turn_id;type:char(36);not null;index:ix_ledger_actions_turn"`
 	Type           string    `gorm:"column:type;type:varchar(191);not null"`
+	ActionKey      *string   `gorm:"column:action_key;type:varchar(191);index:ix_ledger_actions_key"`
 	ParentActionID *string   `gorm:"column:parent_action_id;type:char(36);index:ix_ledger_actions_parent"`
 	EffectKind     string    `gorm:"column:effect_kind;type:varchar(32);not null;default:unknown"`
 	Idempotency    string    `gorm:"column:effect_idempotency;type:varchar(32);not null;default:unknown"`
@@ -837,7 +917,7 @@ type checkpointRow struct {
 	ActorID            string    `gorm:"column:actor_id;type:char(36);not null;index:ix_ledger_checkpoints_actor"`
 	Format             string    `gorm:"column:format;type:varchar(255);not null"`
 	State              jsonMap   `gorm:"column:state;type:json"`
-	ArtifactRef        jsonMap   `gorm:"column:artifact_ref;type:json"`
+	ArtifactID         *string   `gorm:"column:artifact_id;type:char(36);index:ix_ledger_checkpoints_artifact"`
 	LaneID             *string   `gorm:"column:lane_id;type:char(36);index:ix_ledger_checkpoints_lane_seq"`
 	LastAppliedSeq     *int64    `gorm:"column:last_applied_seq;index:ix_ledger_checkpoints_lane_seq"`
 	LastAppliedEventID *string   `gorm:"column:last_applied_event_id;type:char(36);index:ix_ledger_checkpoints_event"`
@@ -852,6 +932,18 @@ func actorToRow(value agentledger.Actor) *actorRow {
 }
 func (row actorRow) toModel() agentledger.Actor {
 	return agentledger.Actor{ID: row.ID, Type: row.Type, Key: stringValue(row.Key), Framework: stringValue(row.Framework), CreatedAt: formatTime(row.CreatedAt)}
+}
+func artifactToRow(value agentledger.Artifact) *artifactRow {
+	return &artifactRow{
+		ID: value.ID, ArtifactKey: value.Key, Version: value.Version, URI: value.URI,
+		SHA256: value.SHA256, Size: value.Size, ContentType: value.ContentType, CreatedAt: mustTime(value.CreatedAt),
+	}
+}
+func (row artifactRow) toModel() agentledger.Artifact {
+	return agentledger.Artifact{
+		ID: row.ID, Key: row.ArtifactKey, Version: row.Version, URI: row.URI,
+		SHA256: row.SHA256, Size: row.Size, ContentType: row.ContentType, CreatedAt: formatTime(row.CreatedAt),
+	}
 }
 func laneToRow(value agentledger.Lane) *laneRow {
 	return &laneRow{ID: value.ID, SessionID: value.SessionID, RunID: value.RunID, Name: value.Name, ParentLaneID: nullable(value.ParentLaneID), LastSeq: value.LastSeq, CreatedAt: mustTime(value.CreatedAt)}
@@ -868,13 +960,13 @@ func (row turnRow) toModel() agentledger.Turn {
 func actionToRow(value agentledger.Action) *actionRow {
 	effect := agentledger.NormalizeEffect(value.Effect)
 	return &actionRow{
-		ID: value.ID, TurnID: value.TurnID, Type: value.Type, ParentActionID: nullable(value.ParentActionID),
+		ID: value.ID, TurnID: value.TurnID, Type: value.Type, ActionKey: nullable(value.Key), ParentActionID: nullable(value.ParentActionID),
 		EffectKind: string(effect.Kind), Idempotency: string(effect.Idempotency), CreatedAt: mustTime(value.CreatedAt),
 	}
 }
 func (row actionRow) toModel() agentledger.Action {
 	return agentledger.Action{
-		ID: row.ID, TurnID: row.TurnID, Type: row.Type, ParentActionID: stringValue(row.ParentActionID),
+		ID: row.ID, TurnID: row.TurnID, Type: row.Type, Key: stringValue(row.ActionKey), ParentActionID: stringValue(row.ParentActionID),
 		Effect:    agentledger.NormalizeEffect(agentledger.Effect{Kind: agentledger.EffectKind(row.EffectKind), Idempotency: agentledger.Idempotency(row.Idempotency)}),
 		CreatedAt: formatTime(row.CreatedAt),
 	}
@@ -912,16 +1004,7 @@ func checkpointToRow(value agentledger.Checkpoint) (*checkpointRow, error) {
 	row := &checkpointRow{
 		ID: value.ID, SchemaVersion: value.SchemaVersion, CheckpointKey: value.Key,
 		Revision: value.Revision, ActorID: value.ActorID, Format: value.Format,
-		State: jsonMap(value.State), Extensions: jsonMap(value.Extensions), CreatedAt: mustTime(value.CreatedAt),
-	}
-	if value.ArtifactRef != nil {
-		encoded, err := json.Marshal(value.ArtifactRef)
-		if err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(encoded, &row.ArtifactRef); err != nil {
-			return nil, err
-		}
+		State: jsonMap(value.State), ArtifactID: nullable(value.ArtifactID), Extensions: jsonMap(value.Extensions), CreatedAt: mustTime(value.CreatedAt),
 	}
 	if value.Anchor != nil {
 		row.LaneID = nullable(value.Anchor.LaneID)
@@ -934,19 +1017,8 @@ func checkpointToRow(value agentledger.Checkpoint) (*checkpointRow, error) {
 func (row checkpointRow) toModel() (agentledger.Checkpoint, error) {
 	proposed := agentledger.ProposedCheckpoint{
 		SchemaVersion: row.SchemaVersion, ID: row.ID, Key: row.CheckpointKey,
-		ActorID: row.ActorID, Format: row.Format, State: map[string]any(row.State),
+		ActorID: row.ActorID, Format: row.Format, State: map[string]any(row.State), ArtifactID: stringValue(row.ArtifactID),
 		Extensions: map[string]any(row.Extensions),
-	}
-	if len(row.ArtifactRef) > 0 {
-		encoded, err := json.Marshal(row.ArtifactRef)
-		if err != nil {
-			return agentledger.Checkpoint{}, err
-		}
-		var ref agentledger.ArtifactRef
-		if err := json.Unmarshal(encoded, &ref); err != nil {
-			return agentledger.Checkpoint{}, err
-		}
-		proposed.ArtifactRef = &ref
 	}
 	if row.LaneID != nil && row.LastAppliedSeq != nil && row.LastAppliedEventID != nil {
 		proposed.Anchor = &agentledger.CheckpointAnchor{
@@ -960,8 +1032,8 @@ func validateCheckpoint(value agentledger.ProposedCheckpoint) error {
 	if value.SchemaVersion != "1.0" || value.ID == "" || value.Key == "" || value.ActorID == "" || value.Format == "" {
 		return errors.New("checkpoint requires schema version, id, key, actor, and format")
 	}
-	if (value.State == nil) == (value.ArtifactRef == nil) {
-		return errors.New("exactly one of state and artifact_ref must be set")
+	if (value.State == nil) == (value.ArtifactID == "") {
+		return errors.New("exactly one of state and artifact_id must be set")
 	}
 	if value.Anchor != nil && (value.Anchor.LaneID == "" || value.Anchor.LastAppliedSeq < 1 || value.Anchor.LastAppliedEventID == "") {
 		return errors.New("checkpoint anchor requires lane, positive seq, and event")
