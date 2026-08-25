@@ -51,6 +51,9 @@ type Config struct {
 	MessageCodec    MessageCodec
 	BeforeTurn      agentgo.BeforeTurnHook
 	AfterTurn       agentgo.AfterTurnHook
+	// ToolResultMessageFactory must match the AgentGo factory used at runtime so
+	// durable tool outcomes can be rebuilt into the same native message type.
+	ToolResultMessageFactory func(agentgo.ToolCall, agentgo.ToolResult) agentgo.AgentMessage
 	// ToolSemantics fixes the logical Action's Effect and effective idempotency key before execution.
 	ToolSemantics ToolSemanticsResolver
 	// CanRetryTool is intentionally fail-closed by default; recovery policy belongs to the caller.
@@ -59,14 +62,15 @@ type Config struct {
 }
 
 type Adapter struct {
-	runtimeRecorder *agentledger.LaneRecorder
-	stateRecorder   *agentledger.LaneRecorder
-	codec           MessageCodec
-	timeout         time.Duration
-	beforeTurn      agentgo.BeforeTurnHook
-	afterTurn       agentgo.AfterTurnHook
-	toolSemantics   ToolSemanticsResolver
-	canRetryTool    ToolRetryPolicy
+	runtimeRecorder   *agentledger.LaneRecorder
+	stateRecorder     *agentledger.LaneRecorder
+	codec             MessageCodec
+	timeout           time.Duration
+	beforeTurn        agentgo.BeforeTurnHook
+	afterTurn         agentgo.AfterTurnHook
+	toolResultFactory func(agentgo.ToolCall, agentgo.ToolResult) agentgo.AgentMessage
+	toolSemantics     ToolSemanticsResolver
+	canRetryTool      ToolRetryPolicy
 
 	mu          sync.Mutex
 	currentTurn string
@@ -116,19 +120,24 @@ func New(ctx context.Context, config Config) (*Adapter, error) {
 	return &Adapter{
 		runtimeRecorder: runtimeRecorder, stateRecorder: stateRecorder, codec: codec,
 		timeout: config.OperationTimeout, beforeTurn: config.BeforeTurn, afterTurn: config.AfterTurn,
-		toolSemantics: toolSemantics, canRetryTool: canRetryTool,
+		toolResultFactory: config.ToolResultMessageFactory,
+		toolSemantics:     toolSemantics, canRetryTool: canRetryTool,
 	}, nil
 }
 
 // Options must be installed after any competing message committer or middleware options.
 func (a *Adapter) Options(existing ...agentgo.ToolMiddleware) []agentgo.AgentOption {
 	middlewares := append([]agentgo.ToolMiddleware{a.ToolMiddleware()}, existing...)
-	return []agentgo.AgentOption{
+	options := []agentgo.AgentOption{
 		agentgo.WithBeforeTurn(a.handleBeforeTurn),
 		agentgo.WithAfterTurn(a.handleAfterTurn),
 		agentgo.WithMessageCommitter(a.commitMessage),
 		agentgo.WithMiddlewares(middlewares...),
 	}
+	if a.toolResultFactory != nil {
+		options = append(options, agentgo.WithToolResultMessageFactory(a.toolResultFactory))
+	}
+	return options
 }
 
 // WrapModel records every physical provider attempt, including AgentGo retries.
