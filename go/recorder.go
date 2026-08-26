@@ -100,6 +100,7 @@ func OpenRecorder(ctx context.Context, options RecorderOptions) (*LaneRecorder, 
 
 func (r *LaneRecorder) Store() EventStore { return r.store }
 func (r *LaneRecorder) Lane() Lane        { return r.lane }
+func (r *LaneRecorder) Actor() Actor      { return r.actor }
 func (r *LaneRecorder) RunID() string     { return r.lane.RunID }
 func (r *LaneRecorder) SessionID() string { return r.lane.SessionID }
 
@@ -153,7 +154,14 @@ func (r *LaneRecorder) FailTurn(ctx context.Context, turnID string, failure erro
 }
 
 func (r *LaneRecorder) BeforeModelCall(ctx context.Context, turnID string, payload map[string]any) (AttemptHandle, error) {
-	return r.beforeCall(ctx, ActionTypeModelCall, turnID, "", payload, Action{}, Effect{
+	return r.BeforeModelCallWithKey(ctx, turnID, "", payload)
+}
+
+// BeforeModelCallWithKey records a model attempt under a caller-owned logical
+// execution key. Adapters use the key to reconnect a framework execution after
+// process recovery; Ledger does not interpret its value.
+func (r *LaneRecorder) BeforeModelCallWithKey(ctx context.Context, turnID, actionKey string, payload map[string]any) (AttemptHandle, error) {
+	return r.beforeCall(ctx, ActionTypeModelCall, turnID, actionKey, payload, Action{}, Effect{
 		Kind: EffectKindNone, Idempotency: IdempotencyNotApplicable,
 	}, 1)
 }

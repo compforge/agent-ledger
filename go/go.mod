@@ -3,7 +3,7 @@ module github.com/compforge/agent-ledger/go
 go 1.25.0
 
 require (
-	github.com/compforge/agentgo v0.0.1
+	github.com/compforge/agentgo v0.0.2-0.20260826112438-691b2c90c5bb
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467
 	go.etcd.io/bbolt v1.5.0
 	gorm.io/driver/sqlite v1.6.0

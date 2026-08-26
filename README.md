@@ -108,7 +108,7 @@ load_latest_checkpoint(key)
 ```
 
 Checkpoint formats are opaque to Ledger, for example
-`application/vnd.compforge.agentgo.message+json;version=1`. A Checkpoint may stand alone or anchor
+`application/vnd.compforge.agentgo.snapshot+json;version=1`. A Checkpoint may stand alone or anchor
 the last applied Event in a Lane; recovery then reads Events after that seq. See
 [Checkpoint](docs/checkpoint.md) for the full boundary and save contract.
 
@@ -133,12 +133,30 @@ lifecycle. `Initialize` creates the Ledger tables without foreign keys.
 | Adapter | Recording | Recovery |
 | --- | --- | --- |
 | Pi AgentHarness | Awaited Turn, model, and tool hooks | Ledger-backed Pi `SessionStorage` Lane |
-| AgentGo | Model wrapper, Turn hooks, message committer, tool middleware | Native messages with `HoldRuns`, `SetMessages`, and `Continue` |
+| AgentGo | Run/Turn hooks plus model and tool middleware | `AgentSnapshot` Checkpoint plus native Loop replay |
 | Plain Python loop | Explicit `LaneRecorder` calls | Snapshot plus completed-outcome replay |
 
 Every adapter publishes actual guarantees such as `strict`, `best_effort`, or `unsupported`.
 Normalized Events support inspection and trajectories; only a harness-native state binding may
 claim lossless recovery.
+
+The AgentGo Adapter installs as one option bundle after the application's base options:
+
+```go
+adapter, err := agentgoadapter.New(ctx, agentgoadapter.Config{
+    Store: store, CheckpointKey: "agent:" + sessionID,
+    SessionID: sessionID, RunID: runID, Actor: actor,
+    OperationTimeout: 5 * time.Second,
+})
+options := append(baseOptions, adapter.Options()...)
+agent := agentgo.NewAgent(options...)
+```
+
+`BeforeRun` restores the native `AgentSnapshot`. Completed model and tool outcomes are returned by
+middleware to the AgentGo Loop, which rebuilds its own messages and progress without repeating the
+provider call or tool side effect. An unresolved tool blocks admission by default; a caller may
+authorize one retry with a caller-owned `recovery_decision_id`. The host still owns its durable
+inbox and must re-deliver accepted input after a process loss.
 
 ## Development
 

@@ -32,7 +32,7 @@ Checkpoint key
 | `key` | Harness 原生可恢复实例的稳定标识，用于组织多个 revision |
 | `revision` | Store 分配的单调版本；首个版本为 1 |
 | `actor_id` | 产生该状态的 Actor |
-| `format` | Adapter 解释的不透明格式，例如 `application/vnd.compforge.agentgo.message+json;version=1` |
+| `format` | Adapter 解释的不透明格式，例如 `application/vnd.compforge.agentgo.snapshot+json;version=1` |
 | `state` / `artifact_id` | 二选一；小状态内联为 JSON，大状态引用已注册的不可变 Artifact 版本 |
 | `anchor` | 可选的 Ledger 恢复位置 |
 | `extensions` | 不影响 Core 语义的扩展信息 |
