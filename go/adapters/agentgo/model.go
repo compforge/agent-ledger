@@ -2,159 +2,145 @@ package agentgoadapter
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 
+	"github.com/compforge/agent-ledger/go"
 	"github.com/compforge/agentgo"
 )
 
-type recordingModel struct {
-	inner   agentgo.ChatModel
-	adapter *Adapter
-}
+// ModelMiddleware records one durable Attempt per physical model execution.
+// A completed result is returned directly to AgentGo during recovery so the
+// native Loop, rather than the Adapter, rebuilds transcript state.
+func (a *Adapter) ModelMiddleware() agentgo.ModelMiddleware {
+	return func(
+		ctx context.Context,
+		execution agentgo.ModelExecution,
+		next agentgo.ModelExecuteFunc,
+	) (agentgo.ModelResult, error) {
+		opCtx, cancel := a.operationContext(ctx)
+		defer cancel()
 
-func (m *recordingModel) Generate(ctx context.Context, messages []agentgo.Message, tools []agentgo.ToolSpec, options ...agentgo.CallOption) (*agentgo.LLMResponse, error) {
-	turnID, err := m.adapter.turnID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	attempt, err := m.adapter.runtimeRecorder.BeforeModelCall(ctx, turnID, m.modelRequestPayload(messages, tools))
-	if err != nil {
-		return nil, fmt.Errorf("record agentgo model request: %w", err)
-	}
-	response, callErr := m.inner.Generate(ctx, messages, tools, options...)
-	if callErr != nil {
-		if _, err := m.adapter.runtimeRecorder.ModelFailed(ctx, attempt, callErr, m.modelFailurePayload(response)); err != nil {
-			return nil, fmt.Errorf("record agentgo model failure: %w", err)
+		payload, err := modelRequestPayload(execution, a.modelIdentity(execution))
+		if err != nil {
+			return agentgo.ModelResult{}, fmt.Errorf("fingerprint agentgo model request: %w", err)
 		}
-		return nil, callErr
-	}
-	if _, err := m.adapter.runtimeRecorder.ModelCompleted(ctx, attempt, m.modelResultPayload(response.Message)); err != nil {
-		return nil, fmt.Errorf("record agentgo model result: %w", err)
-	}
-	return response, nil
-}
-
-func (m *recordingModel) GenerateStream(ctx context.Context, messages []agentgo.Message, tools []agentgo.ToolSpec, options ...agentgo.CallOption) (<-chan agentgo.StreamEvent, error) {
-	turnID, err := m.adapter.turnID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	attempt, err := m.adapter.runtimeRecorder.BeforeModelCall(ctx, turnID, m.modelRequestPayload(messages, tools))
-	if err != nil {
-		return nil, fmt.Errorf("record agentgo model request: %w", err)
-	}
-	source, callErr := m.inner.GenerateStream(ctx, messages, tools, options...)
-	if callErr != nil {
-		if _, err := m.adapter.runtimeRecorder.ModelFailed(ctx, attempt, callErr, nil); err != nil {
-			return nil, fmt.Errorf("record agentgo model failure: %w", err)
-		}
-		return nil, callErr
-	}
-	output := make(chan agentgo.StreamEvent, 16)
-	go func() {
-		defer close(output)
-		terminal := false
-		for event := range source {
-			if event.Type == agentgo.StreamEventDone {
-				terminal = true
-				if _, err := m.adapter.runtimeRecorder.ModelCompleted(ctx, attempt, m.modelResultPayload(event.Message)); err != nil {
-					event = agentgo.StreamEvent{Type: agentgo.StreamEventError, Err: fmt.Errorf("record agentgo model result: %w", err)}
-				}
-			} else if event.Type == agentgo.StreamEventError {
-				terminal = true
-				failure := event.Err
-				if failure == nil {
-					failure = errors.New("agentgo model stream failed")
-				}
-				if _, err := m.adapter.runtimeRecorder.ModelFailed(ctx, attempt, failure, m.modelObservationPayload(event.Message)); err != nil {
-					event.Err = fmt.Errorf("record agentgo model failure: %w", err)
-				}
+		key := a.actionKey(execution.Execution)
+		if record, found := a.execution(agentledger.ActionTypeModelCall, key); found {
+			if err := validateRequestFingerprint(record, payload); err != nil {
+				return agentgo.ModelResult{}, err
 			}
-			select {
-			case output <- event:
-			case <-ctx.Done():
-				return
+			if result, replay, err := replayModelResult(record); replay || err != nil {
+				return result, err
 			}
 		}
-		if !terminal && ctx.Err() == nil {
-			failure := errors.New("agentgo model stream closed without terminal event")
-			if _, err := m.adapter.runtimeRecorder.ModelFailed(ctx, attempt, failure, nil); err != nil {
-				failure = fmt.Errorf("%v; record failure: %w", failure, err)
-			}
-			select {
-			case output <- agentgo.StreamEvent{Type: agentgo.StreamEventError, Err: failure}:
-			case <-ctx.Done():
-			}
+		handle, err := a.beginModelAttempt(opCtx, execution.Execution, payload)
+		if err != nil {
+			return agentgo.ModelResult{}, fmt.Errorf("record agentgo model request: %w", err)
 		}
-	}()
-	return output, nil
-}
-
-func (m *recordingModel) SupportsTools() bool { return m.inner.SupportsTools() }
-
-func (m *recordingModel) ProviderName() string {
-	if named, ok := m.inner.(agentgo.ProviderNamer); ok {
-		return named.ProviderName()
+		result, callErr := next(ctx, execution)
+		finishCtx, finishCancel := a.detachedOperationContext(ctx)
+		defer finishCancel()
+		var terminal agentledger.StoredEvent
+		if callErr != nil {
+			terminal, err = a.runtimeRecorder.ModelFailed(
+				finishCtx, handle, callErr, modelObservationPayload(result.Message),
+			)
+		} else {
+			terminal, err = a.runtimeRecorder.ModelCompleted(
+				finishCtx, handle, modelResultPayload(result),
+			)
+		}
+		if err != nil {
+			return agentgo.ModelResult{}, fmt.Errorf("record agentgo model outcome: %w", err)
+		}
+		a.journal.markAttemptTerminal(handle.AttemptID, terminal)
+		return result, callErr
 	}
-	return ""
 }
 
-func (m *recordingModel) ModelName() string {
-	if named, ok := m.inner.(agentgo.ModelNamer); ok {
-		return named.ModelName()
+func replayModelResult(record executionRecord) (agentgo.ModelResult, bool, error) {
+	for index := len(record.Attempts) - 1; index >= 0; index-- {
+		terminal := record.Attempts[index].Terminal
+		if terminal == nil || terminal.EventType != agentledger.EventTypeAttemptCompleted {
+			continue
+		}
+		var result agentgo.ModelResult
+		if err := decodePayload(terminal.Payload["output"], &result.Message); err != nil {
+			return agentgo.ModelResult{}, true, fmt.Errorf("decode replayed model output: %w", err)
+		}
+		result.HasCompletedToolCalls, _ = terminal.Payload["has_completed_tool_calls"].(bool)
+		return result, true, nil
 	}
-	return ""
+	return agentgo.ModelResult{}, false, nil
 }
 
-func (m *recordingModel) modelRequestPayload(messages []agentgo.Message, tools []agentgo.ToolSpec) map[string]any {
-	payload := map[string]any{"input": map[string]any{"messages": messages, "tools": tools}}
-	if model := modelIdentity(m.ProviderName(), m.ModelName()); model != nil {
+func modelRequestPayload(execution agentgo.ModelExecution, identity ModelIdentity) (map[string]any, error) {
+	payload := executionPayload(execution.Execution)
+	input := map[string]any{
+		"messages": modelMessageInputs(execution.Request.Messages),
+		"tools":    execution.Request.Tools,
+	}
+	payload["input"] = input
+	model := modelPayload(identity.Provider, identity.ID)
+	if model != nil {
 		payload["model"] = model
 	}
-	return payload
+	fingerprint, err := requestFingerprint(map[string]any{"input": input, "model": model})
+	if err != nil {
+		return nil, err
+	}
+	payload["request_fingerprint"] = fingerprint
+	return payload, nil
 }
 
-func (m *recordingModel) modelResultPayload(message agentgo.Message) map[string]any {
-	payload := m.modelObservationPayload(message)
-	payload["output"] = message
-	if message.StopReason != "" {
-		payload["finish_reason"] = string(message.StopReason)
+func modelMessageInputs(messages []agentgo.Message) []map[string]any {
+	inputs := make([]map[string]any, 0, len(messages))
+	for _, message := range messages {
+		input := map[string]any{
+			"role":    message.Role,
+			"content": message.Content,
+		}
+		if message.StopReason != "" {
+			input["stop_reason"] = message.StopReason
+		}
+		if len(message.Metadata) > 0 {
+			input["metadata"] = message.Metadata
+		}
+		inputs = append(inputs, input)
+	}
+	return inputs
+}
+
+func modelResultPayload(result agentgo.ModelResult) map[string]any {
+	payload := modelObservationPayload(result.Message)
+	payload["output"] = result.Message
+	payload["has_completed_tool_calls"] = result.HasCompletedToolCalls
+	if result.Message.StopReason != "" {
+		payload["finish_reason"] = string(result.Message.StopReason)
 	}
 	return payload
 }
 
-func (m *recordingModel) modelFailurePayload(response *agentgo.LLMResponse) map[string]any {
-	if response == nil {
-		return nil
-	}
-	return m.modelObservationPayload(response.Message)
-}
-
-func (m *recordingModel) modelObservationPayload(message agentgo.Message) map[string]any {
+func modelObservationPayload(message agentgo.Message) map[string]any {
 	payload := make(map[string]any)
-	provider, modelName := m.ProviderName(), m.ModelName()
-	if message.Usage != nil {
-		if message.Usage.Provider != "" {
-			provider = message.Usage.Provider
-		}
-		if message.Usage.Model != "" {
-			modelName = message.Usage.Model
-		}
-		payload["usage"] = map[string]any{
-			"input_tokens": message.Usage.Input, "output_tokens": message.Usage.Output,
-			"cache_read_input_tokens":  message.Usage.CacheRead,
-			"cache_write_input_tokens": message.Usage.CacheWrite,
-			"total_tokens":             message.Usage.TotalTokens,
-		}
+	if message.Usage == nil {
+		return payload
 	}
-	if model := modelIdentity(provider, modelName); model != nil {
+	payload["usage"] = map[string]any{
+		"input_tokens":             message.Usage.Input,
+		"output_tokens":            message.Usage.Output,
+		"cache_read_input_tokens":  message.Usage.CacheRead,
+		"cache_write_input_tokens": message.Usage.CacheWrite,
+		"total_tokens":             message.Usage.TotalTokens,
+	}
+	if model := modelPayload(message.Usage.Provider, message.Usage.Model); model != nil {
 		payload["model"] = model
 	}
 	return payload
 }
 
-func modelIdentity(provider, modelName string) map[string]any {
+func modelPayload(provider, modelName string) map[string]any {
 	if modelName == "" {
 		return nil
 	}
@@ -163,4 +149,12 @@ func modelIdentity(provider, modelName string) map[string]any {
 		model["provider"] = provider
 	}
 	return model
+}
+
+func decodePayload(value any, target any) error {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(encoded, target)
 }

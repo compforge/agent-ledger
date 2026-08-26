@@ -39,7 +39,7 @@ Recording boundaries use three guarantee levels:
 
 Recovery uses `native_store`, `snapshot`, `checkpoint`, or `unsupported`. The descriptor describes
 the fully installed Adapter. For example, AgentGo reaches strict physical model Attempts only when
-its model wrapper is installed together with its hooks.
+its model and tool middleware are installed together with its Run and Turn hooks.
 
 ## Lanes and native state
 
@@ -52,7 +52,6 @@ Recommended Lane names are:
 main                                      normalized Harness execution
 branch/<branch_id>                        parallel or speculative Harness branch
 framework/pi/<native_session_id>          Pi session tree for this Run
-framework/agentgo/<native_session_id>     AgentGo native messages for this Run
 ```
 
 An Adapter reopens existing Lanes when the upstream host supplies the same `run_id`; it does not
@@ -75,12 +74,12 @@ Turn
   └── Action(model_call) → Attempt 1
 ```
 
-Actions are logical and retain their caller-owned key and Effect across retries; a Core tool Action
-uses the Harness `tool_call_id` as `Action.key`. A provider or tool retry creates another Attempt
-under the same Action. Before every physical execution, a strict Adapter creates the Attempt and
-commits its complete `attempt.requested`; the first requested Attempt also marks the logical Action
-as started. The Adapter commits a Core terminal Attempt outcome before the Harness consumes the
-outcome.
+Actions are logical and retain their caller-owned key and Effect across retries. An Adapter may use
+a Harness execution ID directly or scope it with a caller-owned Run identity; Ledger does not parse
+the key. A provider or tool retry creates another Attempt under the same Action. Before every
+physical execution, a strict Adapter creates the Attempt and commits its complete
+`attempt.requested`; the first requested Attempt also marks the logical Action as started. The
+Adapter commits a Core terminal Attempt outcome before the Harness consumes the outcome.
 
 Harness work outside model and tool calls uses a concrete Action `type`, such as `compact` or
 `checkpoint`; `operation` is only the conceptual category, not a stored Action type.
@@ -102,16 +101,36 @@ A coding-agent extension that swallows model-hook errors must declare model prew
 
 The AgentGo integration combines:
 
-- `WithMessageCommitter` for native transcript durability before messages enter context or trigger
-  tools;
+- `WithBeforeRun` and `WithAfterRun` for native `AgentSnapshot` Checkpoints at Run admission and a
+  clean terminal boundary;
 - `WithBeforeTurn` and `WithAfterTurn` for Turn boundaries;
-- a `ChatModel` wrapper for every physical provider Attempt, including internal retries;
-- `ToolMiddleware` for write-before-tool and outcome gating;
-- `HoldRuns`, `SetMessages`, and `Continue` for restoration.
+- `ModelMiddleware` for every physical provider Attempt, including AgentGo context-summary calls;
+- `ToolMiddleware` around the complete validation, authorization, and execution pipeline;
+- stable AgentGo `Execution.ID` values, scoped by the Adapter's Checkpoint execution scope, as
+  logical Action keys.
 
-Custom `AgentMessage` implementations require an application codec. The default codec rejects
-unknown message types instead of silently lowering them. Queues that AgentGo cannot export remain a
-declared recovery limitation until a host wrapper captures them.
+The Checkpoint uses AgentGo's codec-aware `AgentSnapshot`, including Loop progress and accepted
+steering/follow-up queues. Custom `AgentMessage` implementations register with the application
+codec supplied to the Adapter. The default AgentGo codec supports built-in state types and rejects
+unknown values instead of silently lowering them.
+
+Recovery does not splice normalized Events into a transcript. `BeforeRun` restores the admission
+Snapshot, then model and tool middleware return completed outcomes as their normal result while the
+AgentGo Loop runs again. This preserves AgentGo's message commit, tool-result construction, progress,
+and context-management rules. Every request carries a semantic fingerprint; a stable Execution ID
+with different input fails closed instead of consuming an unrelated old outcome.
+
+The Adapter owns only input already accepted into `AgentSnapshot`. Input passed to the current
+`Prompt`, `Continue`, or `Inject` remains an upstream durable-inbox responsibility until AgentGo
+accepts it. After process loss the host must re-deliver that input; Ledger records that AgentGo knew
+an execution, not that the upstream request source acknowledged consumption.
+
+AgentGo currently converts a `ToolMiddleware` error into a normal tool-error result. The Adapter
+therefore checks for an unresolved tool again in `AfterTurn` and stops the Run before another model
+or tool execution, while retaining the admission Checkpoint for recovery. This prevents further
+external progress but cannot prevent AgentGo from briefly projecting the synthetic tool-error
+result in process memory, so the profile declares `outcome_gate = best_effort`. A future fatal tool
+middleware error contract can raise that capability to `strict`.
 
 ## Recovery sequence
 
@@ -119,8 +138,8 @@ Adapters follow the same semantic sequence even though their APIs differ:
 
 1. freeze or create an idle Harness runtime;
 2. load the latest Checkpoint and reject an unsupported state `format` before restoration;
-3. replay already completed outcomes after that checkpoint into native state without re-executing
-   their external actions;
+3. return already completed outcomes through the Harness's native execution boundary, without
+   re-executing their external actions or mutating native state out of band;
 4. inspect unresolved Attempts and reconcile them with provider/tool state;
 5. never retry an unresolved side-effecting tool unless idempotency or explicit human resolution
    makes it safe;
