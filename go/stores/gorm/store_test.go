@@ -30,6 +30,7 @@ func TestSQLiteStorePersistsExecutionModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	actor := agentledger.NewActor("agent", "agentgo")
+	actor.Key = "primary-harness"
 	lane := agentledger.NewLane("session", "run", "main", "")
 	turn := agentledger.NewTurn(lane.ID)
 	action := agentledger.NewAction(turn.ID, "model_call", "model-1", "")
@@ -48,6 +49,24 @@ func TestSQLiteStorePersistsExecutionModel(t *testing.T) {
 		if err := item.create(); err != nil {
 			t.Fatalf("create %s: %v", item.label, err)
 		}
+	}
+	columns, err := db.Migrator().ColumnTypes("ledger_actors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasActorKey := false
+	for _, column := range columns {
+		if column.Name() == "key" {
+			t.Fatal("actor identity must not be persisted as key")
+		}
+		hasActorKey = hasActorKey || column.Name() == "actor_key"
+	}
+	if !hasActorKey {
+		t.Fatal("actor identity must be persisted as actor_key")
+	}
+	loadedActor, found, err := store.GetActorByKey(ctx, actor.Key)
+	if err != nil || !found || loadedActor.ID != actor.ID || loadedActor.Key != actor.Key {
+		t.Fatalf("actor key round trip = %#v, found = %v, error = %v", loadedActor, found, err)
 	}
 	event := agentledger.NewEvent("attempt.requested", lane.ID, attempt.ID, actor)
 	event.Payload = map[string]any{"model": "test"}

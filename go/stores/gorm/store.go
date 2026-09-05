@@ -858,7 +858,7 @@ func (value *jsonMap) Scan(source any) error {
 type actorRow struct {
 	ID        string    `gorm:"column:id;type:char(36);primaryKey"`
 	Type      string    `gorm:"column:type;type:varchar(64);not null"`
-	Key       *string   `gorm:"column:actor_key;type:varchar(191);uniqueIndex:uq_ledger_actors_key"`
+	ActorKey  *string   `gorm:"type:varchar(191);uniqueIndex:uq_ledger_actors_key"`
 	Framework *string   `gorm:"column:framework;type:varchar(191)"`
 	CreatedAt time.Time `gorm:"column:created_at;not null"`
 }
@@ -967,10 +967,10 @@ type checkpointRow struct {
 func (checkpointRow) TableName() string { return "ledger_checkpoints" }
 
 func actorToRow(value agentledger.Actor) *actorRow {
-	return &actorRow{ID: value.ID, Type: value.Type, Key: nullable(value.Key), Framework: nullable(value.Framework), CreatedAt: mustTime(value.CreatedAt)}
+	return &actorRow{ID: value.ID, Type: value.Type, ActorKey: nullable(value.Key), Framework: nullable(value.Framework), CreatedAt: mustTime(value.CreatedAt)}
 }
 func (row actorRow) toModel() agentledger.Actor {
-	return agentledger.Actor{ID: row.ID, Type: row.Type, Key: stringValue(row.Key), Framework: stringValue(row.Framework), CreatedAt: formatTime(row.CreatedAt)}
+	return agentledger.Actor{ID: row.ID, Type: row.Type, Key: stringValue(row.ActorKey), Framework: stringValue(row.Framework), CreatedAt: formatTime(row.CreatedAt)}
 }
 func artifactToRow(value agentledger.Artifact) *artifactRow {
 	return &artifactRow{
