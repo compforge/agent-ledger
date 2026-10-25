@@ -177,9 +177,9 @@ Ledger records these facts durably; View organizes them for inspection without r
 Store, UUID identifiers or an Action/Attempt hierarchy. Native Session and Trace adapters can
 construct View directly.
 
-- Go: `common` and `view` subpackages; `agentledger.ProjectView` projects a loaded Run.
-- Python: `agent_ledger.common`, `agent_ledger.view`, and `agent_ledger.project_view`.
-- TypeScript: `@agent-ledger/common`, `@agent-ledger/view`, and Core's `projectView`.
+- Go: `common` and `view` subpackages; `projections/ledgerview.Project` projects a loaded Run.
+- Python: `agent_ledger.common`, `agent_ledger.view`, and `agent_ledger.projections.view.project_view`.
+- TypeScript: `@agent-ledger/common`, `@agent-ledger/view`, and `@agent-ledger/ledger-view`.
 
 The TypeScript View package renders a standalone HTML document from the same JSON contract used
 by all three SDKs. See [Execution View](docs/execution-view.md) for the model and examples.

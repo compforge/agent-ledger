@@ -9,7 +9,7 @@ from referencing import Registry, Resource
 
 from agent_ledger.common import CallRequest, CallResponse, Model, Usage
 from agent_ledger.models import RunView
-from agent_ledger.projection import project_view
+from agent_ledger.projections.view import project_view
 from agent_ledger.view import Document, ModelCall, ToolCall, Turn
 
 ROOT = Path(__file__).parents[2]
@@ -141,3 +141,32 @@ def test_null_and_absent_content_are_distinct_and_artifacts_are_exclusive() -> N
     assert CallResponse().model_dump(mode="json") == {}
     with pytest.raises(ValidationError, match="both input"):
         CallRequest(input=None, input_artifact_id="body")
+
+
+async def test_typed_failed_calls_keep_structured_error_and_event_details():
+    from agent_ledger import Actor, LaneRecorder
+    from agent_ledger.stores.memory import MemoryEventStore
+
+    vector = fixture("common-call.json")
+    store = MemoryEventStore()
+    recorder = await LaneRecorder.open(
+        store=store, session_id="s", run_id="r", actor=Actor(type="agent", key="test")
+    )
+    turn = await recorder.start_turn()
+    attempt = await recorder.before_model_call(
+        turn, payload=CallRequest.model_validate(vector["request"]), details=vector["details"]
+    )
+    await recorder.model_failed(
+        attempt,
+        RuntimeError("fallback"),
+        payload=CallResponse.model_validate(vector["response"]),
+        details=vector["details"],
+    )
+    document = project_view(await store.load_run("s", "r"))
+    projected_turn = next(n for n in document.runs[0].items if isinstance(n, Turn))
+    call = next(n for n in projected_turn.items if isinstance(n, ModelCall))
+    assert isinstance(call, ModelCall)
+    assert call.status == "failed"
+    assert call.request.model_dump(mode="json", exclude_unset=True) == vector["request"]
+    assert call.response.model_dump(mode="json", exclude_unset=True) == vector["response"]
+    assert list(call.attributes["event_details"].values()) == [vector["details"], vector["details"]]

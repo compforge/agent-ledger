@@ -33,3 +33,5 @@ claim Agent Ledger schema `1.x` compatibility.
 parallel Lanes and incomplete outcomes through every SDK. Shared call definitions live in
 `common.schema.json`; Ledger payload profiles and `view.schema.json` reference them.
 Validation retains absent values and explicit zero/null without inventing timing or recovery state.
+
+- `vectors/common-call.json`: common request/response codecs preserve null, zero usage and separate source-specific details across all three SDKs.

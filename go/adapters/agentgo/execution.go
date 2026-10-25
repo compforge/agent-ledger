@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/compforge/agent-ledger/go"
+	"github.com/compforge/agent-ledger/go/common"
 	"github.com/compforge/agentgo"
 )
 
@@ -19,6 +20,11 @@ func (a *Adapter) beginModelAttempt(
 	execution agentgo.Execution,
 	payload map[string]any,
 ) (agentledger.AttemptHandle, error) {
+	facts, err := common.DecodeRequest(payload)
+	if err != nil {
+		return agentledger.AttemptHandle{}, fmt.Errorf("decode agentgo call request: %w", err)
+	}
+
 	turn, err := a.turnForExecution(execution)
 	if err != nil {
 		return agentledger.AttemptHandle{}, err
@@ -34,7 +40,7 @@ func (a *Adapter) beginModelAttempt(
 		}
 		return a.retry(ctx, record, payload)
 	}
-	handle, err := a.runtimeRecorder.BeforeModelCallWithKey(ctx, turn.ID, key, payload)
+	handle, err := a.runtimeRecorder.BeforeModelCallWithKey(ctx, turn.ID, key, facts, common.CallDetails(payload))
 	if err != nil {
 		return agentledger.AttemptHandle{}, err
 	}
@@ -50,6 +56,11 @@ func (a *Adapter) beginToolAttempt(
 	semantics ToolSemantics,
 	payload map[string]any,
 ) (agentledger.AttemptHandle, error) {
+	facts, err := common.DecodeRequest(payload)
+	if err != nil {
+		return agentledger.AttemptHandle{}, fmt.Errorf("decode agentgo call request: %w", err)
+	}
+
 	turn, err := a.turnForExecution(execution.Execution)
 	if err != nil {
 		return agentledger.AttemptHandle{}, err
@@ -58,7 +69,7 @@ func (a *Adapter) beginToolAttempt(
 	record, exists := a.execution(agentledger.ActionTypeToolCall, key)
 	if !exists {
 		handle, err := a.runtimeRecorder.BeforeToolCallWithEffect(
-			ctx, turn.ID, key, payload, semantics.Effect,
+			ctx, turn.ID, key, facts, semantics.Effect, common.CallDetails(payload),
 		)
 		if err != nil {
 			return agentledger.AttemptHandle{}, err
@@ -98,13 +109,18 @@ func (a *Adapter) retry(
 	record executionRecord,
 	payload map[string]any,
 ) (agentledger.AttemptHandle, error) {
+	facts, err := common.DecodeRequest(payload)
+	if err != nil {
+		return agentledger.AttemptHandle{}, fmt.Errorf("decode agentgo call request: %w", err)
+	}
+
 	attemptNo := 1
 	for _, attempt := range record.Attempts {
 		if attempt.Attempt.AttemptNo >= attemptNo {
 			attemptNo = attempt.Attempt.AttemptNo + 1
 		}
 	}
-	handle, err := a.runtimeRecorder.Retry(ctx, record.Action.ID, attemptNo, payload)
+	handle, err := a.runtimeRecorder.Retry(ctx, record.Action.ID, attemptNo, facts, common.CallDetails(payload))
 	if err != nil {
 		return agentledger.AttemptHandle{}, err
 	}

@@ -42,14 +42,22 @@ func (a *Adapter) ModelMiddleware() agentgo.ModelMiddleware {
 		result, callErr := next(ctx, execution)
 		finishCtx, finishCancel := a.detachedOperationContext(ctx)
 		defer finishCancel()
+		observation := modelObservationPayload(result.Message)
+		if callErr == nil {
+			observation = modelResultPayload(result)
+		}
+		facts, err := callfacts.DecodeResponse(observation)
+		if err != nil {
+			return agentgo.ModelResult{}, fmt.Errorf("decode agentgo model outcome: %w", err)
+		}
 		var terminal agentledger.StoredEvent
 		if callErr != nil {
 			terminal, err = a.runtimeRecorder.ModelFailed(
-				finishCtx, handle, callErr, modelObservationPayload(result.Message),
+				finishCtx, handle, callErr, facts, callfacts.CallDetails(observation),
 			)
 		} else {
 			terminal, err = a.runtimeRecorder.ModelCompleted(
-				finishCtx, handle, modelResultPayload(result),
+				finishCtx, handle, facts, callfacts.CallDetails(observation),
 			)
 		}
 		if err != nil {

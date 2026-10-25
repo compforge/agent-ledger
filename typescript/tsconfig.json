@@ -12,6 +12,9 @@
     },
     {
       "path": "./packages/pi"
+    },
+    {
+      "path": "./packages/ledger-view"
     }
   ]
 }

@@ -1,0 +1,40 @@
+{
+  "request": {
+    "input": null,
+    "model": {
+      "id": "requested",
+      "provider": "provider"
+    },
+    "tool_name": "lookup",
+    "client_request_id": "client-1"
+  },
+  "response": {
+    "output": null,
+    "model": {
+      "id": "actual",
+      "provider": "provider"
+    },
+    "usage": {
+      "input_tokens": 0,
+      "output_tokens": 2,
+      "cache_read_input_tokens": 0,
+      "cache_write_input_tokens": 1,
+      "total_tokens": 3
+    },
+    "error": {
+      "type": "ProviderError",
+      "message": "limited",
+      "code": "quota",
+      "retryable": false
+    },
+    "finish_reason": "error",
+    "provider_request_id": "provider-1",
+    "external_operation_id": "operation-1"
+  },
+  "details": {
+    "recovery_decision_id": "decision-1",
+    "vendor": {
+      "sequence": 7
+    }
+  }
+}

@@ -2,9 +2,12 @@ package agentledger
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/compforge/agent-ledger/go/common"
 )
 
 func TestMemoryStoreExecutionHierarchyAndAppend(t *testing.T) {
@@ -215,26 +218,24 @@ func TestLaneRecorderCreatesAttemptsForRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := recorder.BeforeModelCall(ctx, turn.ID, map[string]any{"input": []any{}})
+	first, err := recorder.BeforeModelCall(ctx, turn.ID, common.CallRequest{Input: json.RawMessage(`[]`)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	failed, err := recorder.ModelFailed(ctx, first, errors.New("timeout"), map[string]any{
-		"usage": map[string]any{"input_tokens": 8}, "provider_request_id": "request-1",
-	})
+	failed, err := recorder.ModelFailed(ctx, first, errors.New("timeout"), common.CallResponse{Usage: &common.Usage{InputTokens: ptrInt64(8)}, ProviderRequestID: "request-1"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if failed.EventType != EventTypeAttemptFailed || failed.Payload["provider_request_id"] != "request-1" {
 		t.Fatalf("failed Event = %#v", failed)
 	}
-	if usage, ok := failed.Payload["usage"].(map[string]any); !ok || usage["input_tokens"] != 8 {
+	if usage, ok := failed.Payload["usage"].(map[string]any); !ok || usage["input_tokens"] != json.Number("8") {
 		t.Fatalf("failed usage = %#v", failed.Payload["usage"])
 	}
 	if failure, ok := failed.Payload["error"].(map[string]any); !ok || failure["message"] != "timeout" {
 		t.Fatalf("structured error = %#v", failed.Payload["error"])
 	}
-	second, err := recorder.Retry(ctx, first.ActionID, 2, map[string]any{"input": []any{}})
+	second, err := recorder.Retry(ctx, first.ActionID, 2, common.CallRequest{Input: json.RawMessage(`[]`)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,22 +273,18 @@ func TestAttemptCancellationAndUnknownOutcomeAreTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cancelled, err := recorder.BeforeModelCall(ctx, turn.ID, map[string]any{"input": []any{}})
+	cancelled, err := recorder.BeforeModelCall(ctx, turn.ID, common.CallRequest{Input: json.RawMessage(`[]`)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := recorder.CancelAttempt(ctx, cancelled, "user_interrupt"); err != nil {
 		t.Fatal(err)
 	}
-	unknown, err := recorder.BeforeToolCall(ctx, turn.ID, "tool-1", map[string]any{
-		"tool_name": "write", "input": map[string]any{},
-	})
+	unknown, err := recorder.BeforeToolCall(ctx, turn.ID, "tool-1", common.CallRequest{ToolName: "write", Input: json.RawMessage(`{}`)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	replacement, err := recorder.Retry(ctx, unknown.ActionID, 2, map[string]any{
-		"tool_name": "write", "input": map[string]any{}, "recovery_decision_id": "decision-1",
-	})
+	replacement, err := recorder.Retry(ctx, unknown.ActionID, 2, common.CallRequest{ToolName: "write", Input: json.RawMessage(`{}`)}, map[string]any{"recovery_decision_id": "decision-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,9 +315,7 @@ func TestRunCompletionLinksCheckpointAtomicallyAndRemainsInspectable(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	unresolved, err := recorder.BeforeToolCall(ctx, turn.ID, "charge-1", map[string]any{
-		"tool_name": "charge", "input": map[string]any{},
-	})
+	unresolved, err := recorder.BeforeToolCall(ctx, turn.ID, "charge-1", common.CallRequest{ToolName: "charge", Input: json.RawMessage(`{}`)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,5 +410,14 @@ func TestCommittedEventContentIsImmutable(t *testing.T) {
 	}
 	if got := stored.Payload["nested"].(map[string]any)["value"]; got != float64(1) {
 		t.Fatalf("stored value = %v", got)
+	}
+}
+
+func ptrInt64(value int64) *int64 { return &value }
+
+func TestCallDetailsCannotShadowFacts(t *testing.T) {
+	_, err := callPayload(common.CallRequest{Input: json.RawMessage(`null`)}, map[string]any{"input": "hidden"})
+	if err == nil {
+		t.Fatal("event details shadowed call facts")
 	}
 }

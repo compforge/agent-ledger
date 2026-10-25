@@ -52,7 +52,6 @@ from agent_ledger.models import (
     new_id,
     select_run,
 )
-from agent_ledger.projection import project_view
 from agent_ledger.recorder import AttemptHandle, LaneRecorder
 from agent_ledger.store import ActorStore, ArtifactStore, CheckpointStore, EventStore
 from agent_ledger.trajectory import project_atif

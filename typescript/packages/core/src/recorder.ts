@@ -1,4 +1,4 @@
-import type { CallError } from "@agent-ledger/common";
+import { requestPayload, responsePayload, callDetails, type CallRequest, type CallResponse, type CallError } from "@agent-ledger/common";
 import { EntityConflict, EntityNotFound } from "./memory-store.js";
 import type { EventStore } from "./store.js";
 import {
@@ -146,9 +146,10 @@ export class LaneRecorder {
     return this.record(EventType.TURN_FAILED, turnId, { payload: errorPayload(error) });
   }
 
-  beforeModelCall(turnId: string, payload: { [key: string]: JsonValue }): Promise<AttemptHandle> {
+  beforeModelCall(turnId: string, payload: CallRequest, details: { [key: string]: JsonValue } = {}): Promise<AttemptHandle> {
+    const eventPayload = callPayload(requestPayload(payload), details);
     return this.#beforeCall(
-      ActionType.MODEL_CALL, turnId, undefined, payload, undefined,
+      ActionType.MODEL_CALL, turnId, undefined, eventPayload, undefined,
       { kind: EffectKind.NONE, idempotency: Idempotency.NOT_APPLICABLE }, 1,
     );
   }
@@ -156,46 +157,55 @@ export class LaneRecorder {
   beforeToolCall(
     turnId: string,
     actionKey: string,
-    payload: { [key: string]: JsonValue },
+    payload: CallRequest,
     effect: Effect = { kind: EffectKind.UNKNOWN, idempotency: Idempotency.UNKNOWN },
+    details: { [key: string]: JsonValue } = {},
   ): Promise<AttemptHandle> {
+    const eventPayload = callPayload(requestPayload(payload), details);
     if (actionKey.length === 0) throw new Error("tool_call requires an action key");
-    return this.#beforeCall(ActionType.TOOL_CALL, turnId, actionKey, payload, undefined, effect, 1);
+    return this.#beforeCall(ActionType.TOOL_CALL, turnId, actionKey, eventPayload, undefined, effect, 1);
   }
 
-  async retry(actionId: string, attemptNo: number, payload: { [key: string]: JsonValue }): Promise<AttemptHandle> {
+  async retry(actionId: string, attemptNo: number, payload: CallRequest, details: { [key: string]: JsonValue } = {}): Promise<AttemptHandle> {
+    const eventPayload = callPayload(requestPayload(payload), details);
     const action = await this.store.getAction(actionId);
     if (action === undefined) throw new EntityNotFound(`action ${actionId}`);
     if (action.type !== ActionType.MODEL_CALL && action.type !== ActionType.TOOL_CALL) throw new Error(`action ${actionId} is not retryable`);
-    return this.#beforeCall(action.type, action.turn_id, action.key, payload, action, action.effect, attemptNo);
+    return this.#beforeCall(action.type, action.turn_id, action.key, eventPayload, action, action.effect, attemptNo);
   }
 
-  modelCompleted(attempt: AttemptHandle, payload: { [key: string]: JsonValue }): Promise<StoredEvent> {
+  modelCompleted(attempt: AttemptHandle, payload: CallResponse, details: { [key: string]: JsonValue } = {}): Promise<StoredEvent> {
+    const eventPayload = callPayload(responsePayload(payload), details);
     this.#assertActionType(attempt, ActionType.MODEL_CALL);
-    return this.#completeAttempt(attempt, payload);
+    return this.#completeAttempt(attempt, eventPayload);
   }
 
   modelFailed(
     attempt: AttemptHandle,
     error: unknown,
-    payload: { [key: string]: JsonValue } = {},
+    payload: CallResponse = {},
+    details: { [key: string]: JsonValue } = {},
   ): Promise<StoredEvent> {
+    const eventPayload = callPayload(responsePayload(payload), details);
     this.#assertActionType(attempt, ActionType.MODEL_CALL);
-    return this.#failAttempt(attempt, error, payload);
+    return this.#failAttempt(attempt, error, eventPayload);
   }
 
-  toolCompleted(attempt: AttemptHandle, payload: { [key: string]: JsonValue }): Promise<StoredEvent> {
+  toolCompleted(attempt: AttemptHandle, payload: CallResponse, details: { [key: string]: JsonValue } = {}): Promise<StoredEvent> {
+    const eventPayload = callPayload(responsePayload(payload), details);
     this.#assertActionType(attempt, ActionType.TOOL_CALL);
-    return this.#completeAttempt(attempt, payload);
+    return this.#completeAttempt(attempt, eventPayload);
   }
 
   toolFailed(
     attempt: AttemptHandle,
     error: unknown,
-    payload: { [key: string]: JsonValue } = {},
+    payload: CallResponse = {},
+    details: { [key: string]: JsonValue } = {},
   ): Promise<StoredEvent> {
+    const eventPayload = callPayload(responsePayload(payload), details);
     this.#assertActionType(attempt, ActionType.TOOL_CALL);
-    return this.#failAttempt(attempt, error, payload);
+    return this.#failAttempt(attempt, error, eventPayload);
   }
 
   cancelAttempt(attempt: AttemptHandle, reason: string): Promise<StoredEvent> {
@@ -342,10 +352,15 @@ function errorPayload(
   payload: { [key: string]: JsonValue } = {},
 ): { [key: string]: JsonValue } {
   return {
-    ...payload,
     error: {
       type: error instanceof Error ? error.name : typeof error,
       message: error instanceof Error ? error.message : String(error),
     } satisfies CallError,
+    ...payload,
   };
+}
+
+function callPayload(facts: { [key: string]: JsonValue }, details: { [key: string]: JsonValue }): { [key: string]: JsonValue } {
+ if (Object.keys(callDetails(details)).length !== Object.keys(details).length) throw new Error("event details overlap shared call facts");
+ return { ...details, ...facts };
 }

@@ -252,28 +252,17 @@ func (d Document) Validate() error {
 				children = append(children, run)
 			}
 		}
-		if request != nil && len(request.Input) > 0 && request.InputArtifactID != "" {
-			return fmt.Errorf("node %s: ambiguous request content", n.ID)
-		}
-		if response != nil && len(response.Output) > 0 && response.OutputArtifactID != "" {
-			return fmt.Errorf("node %s: ambiguous response content", n.ID)
-		}
-		if request != nil && request.Model != nil && request.Model.ID == "" {
-			return fmt.Errorf("node %s: empty model id", n.ID)
+		if request != nil {
+			if err := request.Validate(); err != nil {
+				return fmt.Errorf("node %s request: %w", n.ID, err)
+			}
 		}
 		if response != nil {
-			if response.Model != nil && response.Model.ID == "" {
-				return fmt.Errorf("node %s: empty model id", n.ID)
-			}
-			if response.Usage != nil {
-				u := response.Usage
-				for _, v := range []*int64{u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheWriteInputTokens, u.TotalTokens} {
-					if v != nil && *v < 0 {
-						return fmt.Errorf("node %s: negative usage", n.ID)
-					}
-				}
+			if err := response.Validate(); err != nil {
+				return fmt.Errorf("node %s response: %w", n.ID, err)
 			}
 		}
+
 		for _, child := range children {
 			if err := visit(child, item.Kind()); err != nil {
 				return err

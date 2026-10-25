@@ -22,16 +22,42 @@ Ledger call-payload schema references these shared definitions. AgentGo/Pi adapt
 use them as well as View.
 
 Ledger's `RunView` remains an Events-and-entities query result. View's `Run` is an execution tree.
-There is no new authoritative Session or Run row. The Ledger-to-View projection lives on the
-Ledger side and imports View; View imports only shared execution facts. Native evidence can enter
+There is no new authoritative Session or Run row. The optional Ledger-to-View projection imports both modules. Neither Ledger Core nor View
+imports the other; both depend only on common facts. Native evidence can enter
 View without a dependency on Ledger Core.
 
 ```text
 Shared execution facts (common)
        ↑          ↑
  Ledger Core     View model → View rendering
-       └───────────↑
-            projection
+       ↑          ↑
+       └─ projection ─┘
+```
+
+## Typed call boundary
+
+Model/tool Recorder methods, including retries and failure observations, accept common
+`CallRequest` / `CallResponse` values. Native Adapter payloads are decoded through common before
+recording. Generic Events remain open JSON. Source-specific fields such as recovery decisions,
+fingerprints and tool replay flags are passed separately as `details`; they remain flat in the
+stored Event payload and cannot shadow shared fields. A supplied structured error is retained;
+the exception provides a fallback only when the response has no error fact. The Event wire format
+is unchanged.
+
+Common owns field selection and call validation. Projection extracts shared facts through those
+codecs and retains other fields as evidence. Python fields declare whether explicit null is native
+content; serialization does not infer that behavior from a field name. Missing content remains
+absent, explicit null remains null, and zero usage remains zero.
+
+```python
+from agent_ledger.common import CallRequest, CallResponse
+
+attempt = await recorder.before_model_call(
+    turn,
+    payload=CallRequest(input={"messages": messages}),
+    details={"request_fingerprint": fingerprint},
+)
+await recorder.model_completed(attempt, payload=CallResponse(output=result))
 ```
 
 ## View contract
@@ -72,7 +98,7 @@ selection, paging and storage retention remain with the caller.
 Python, reading an already loaded Ledger Run:
 
 ```python
-from agent_ledger import project_view
+from agent_ledger.projections.view import project_view
 
 recording = await store.load_run(session_id, run_id)
 document = project_view(recording)
@@ -81,7 +107,7 @@ document = project_view(recording)
 TypeScript, reading and rendering a Ledger Run:
 
 ```ts
-import { projectView } from "@agent-ledger/core";
+import { projectView } from "@agent-ledger/ledger-view";
 import { renderHTML } from "@agent-ledger/view";
 
 const document = projectView(await store.loadRun(sessionId, runId));
@@ -91,7 +117,9 @@ const html = renderHTML(document, "Agent execution");
 Go:
 
 ```go
-document, err := agentledger.ProjectView(recording)
+import "github.com/compforge/agent-ledger/go/projections/ledgerview"
+
+document, err := ledgerview.Project(recording)
 if err != nil { return err }
 return json.NewEncoder(writer).Encode(document)
 ```
@@ -105,8 +133,11 @@ escapes recorded content, and uses native details controls. Evidence paths appea
 `conformance/vectors/view.json` covers native IDs, ordered message roles, zero usage, explicit null,
 missing results and nested execution. `view-ledger.json` covers two overlapping Lanes, retries,
 failed-call usage, unknown outcomes and open event vocabulary. All language SDKs read these same
-fixtures. Additional tests check conflicting terminal observations and renderer escaping.
+fixtures. `common-call.json` checks shared field round trips, null content, zero usage and source details.
+Additional tests check conflicting terminal observations, field-shadowing rejection, package
+dependency boundaries and renderer escaping.
 
-The existing Action/Attempt, Event, Checkpoint and Store contracts are unchanged. View is a derived
+The Action/Attempt, Event, Checkpoint and Store wire contracts are unchanged. Recorder call APIs
+use common types, and projection imports use the separate modules shown above. View is a derived
 read model and is never a recovery checkpoint. CCR/Pi/Trace ingestion adapters and richer rendering
 can consume this public contract without changing Ledger write semantics.

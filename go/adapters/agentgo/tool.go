@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/compforge/agent-ledger/go"
+	"github.com/compforge/agent-ledger/go/common"
 	"github.com/compforge/agentgo"
 )
 
@@ -46,16 +47,20 @@ func (a *Adapter) ToolMiddleware() agentgo.ToolMiddleware {
 		result, callErr := next(ctx, execution)
 		finishCtx, finishCancel := a.detachedOperationContext(ctx)
 		defer finishCancel()
-		outcomePayload := map[string]any{"output": persistedToolResultFrom(result)}
+		output, err := json.Marshal(persistedToolResultFrom(result))
+		if err != nil {
+			return agentgo.ToolResult{}, fmt.Errorf("encode agentgo tool outcome: %w", err)
+		}
+		outcomePayload := common.CallResponse{Output: output}
 		var terminal agentledger.StoredEvent
 		if callErr != nil || result.IsError {
 			failure := callErr
 			if failure == nil {
 				failure = fmt.Errorf("tool %s returned an error result", execution.Call.Name)
 			}
-			terminal, err = a.runtimeRecorder.ToolFailed(finishCtx, handle, failure, outcomePayload)
+			terminal, err = a.runtimeRecorder.ToolFailed(finishCtx, handle, failure, outcomePayload, nil)
 		} else {
-			terminal, err = a.runtimeRecorder.ToolCompleted(finishCtx, handle, outcomePayload)
+			terminal, err = a.runtimeRecorder.ToolCompleted(finishCtx, handle, outcomePayload, nil)
 		}
 		if err != nil {
 			return agentgo.ToolResult{}, fmt.Errorf("record agentgo tool outcome: %w", err)

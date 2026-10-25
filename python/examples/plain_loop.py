@@ -1,6 +1,7 @@
 import asyncio
 
 from agent_ledger import Actor, LaneRecorder
+from agent_ledger.common import CallRequest, CallResponse, Model
 from agent_ledger.frameworks.plain_loop import PlainLoopContext, PlainLoopProfile
 from agent_ledger.stores.memory import MemoryEventStore
 
@@ -19,14 +20,13 @@ async def main() -> None:
     turn = await recorder.start_turn()
     attempt = await recorder.before_model_call(
         turn,
-        payload={
-            "model": {"id": "example-model"},
-            "input": [{"role": "user", "content": "hello"}],
-        },
+        payload=CallRequest(
+            model=Model(id="example-model"), input=[{"role": "user", "content": "hello"}]
+        ),
     )
     await recorder.model_completed(
         attempt,
-        payload={"output": {"role": "assistant", "content": "Hello!"}},
+        payload=CallResponse(output={"role": "assistant", "content": "Hello!"}),
     )
     await recorder.complete_turn(turn)
     await profile.save(

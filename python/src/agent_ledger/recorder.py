@@ -226,14 +226,14 @@ class LaneRecorder:
         self,
         turn: Turn | str,
         *,
-        payload: dict[str, Any] | CallRequest,
+        payload: CallRequest,
+        details: dict[str, Any] | None = None,
     ) -> AttemptHandle:
-        if isinstance(payload, CallRequest):
-            payload = payload.model_dump(mode="json", exclude_unset=True)
+        event_payload = _call_payload(payload, details)
         return await self._before_call(
             ActionType.MODEL_CALL,
             _entity_id(turn),
-            payload,
+            event_payload,
             effect=Effect(kind=EffectKind.NONE, idempotency=Idempotency.NOT_APPLICABLE),
         )
 
@@ -242,17 +242,17 @@ class LaneRecorder:
         turn: Turn | str,
         *,
         action_key: str,
-        payload: dict[str, Any] | CallRequest,
+        payload: CallRequest,
         effect: Effect | None = None,
+        details: dict[str, Any] | None = None,
     ) -> AttemptHandle:
-        if isinstance(payload, CallRequest):
-            payload = payload.model_dump(mode="json", exclude_unset=True)
+        event_payload = _call_payload(payload, details)
         if not action_key:
             raise ValueError("tool_call requires an action key")
         return await self._before_call(
             ActionType.TOOL_CALL,
             _entity_id(turn),
-            payload,
+            event_payload,
             action_key=action_key,
             effect=effect or Effect(),
         )
@@ -262,8 +262,10 @@ class LaneRecorder:
         action_id: str,
         attempt_no: int,
         *,
-        payload: dict[str, Any],
+        payload: CallRequest,
+        details: dict[str, Any] | None = None,
     ) -> AttemptHandle:
+        event_payload = _call_payload(payload, details)
         action = await self.store.get_action(action_id)
         if action is None:
             raise EntityNotFound("action", action_id)
@@ -273,7 +275,7 @@ class LaneRecorder:
         return await self._before_call(
             action_type,
             action.turn_id,
-            payload,
+            event_payload,
             action_key=action.key,
             action=action,
             attempt_no=attempt_no,
@@ -335,43 +337,47 @@ class LaneRecorder:
         self,
         attempt: AttemptHandle,
         *,
-        payload: dict[str, Any] | CallResponse,
+        payload: CallResponse,
+        details: dict[str, Any] | None = None,
     ) -> StoredEvent:
-        if isinstance(payload, CallResponse):
-            payload = payload.model_dump(mode="json", exclude_unset=True)
+        event_payload = _call_payload(payload, details)
         _require_action_type(attempt, ActionType.MODEL_CALL)
-        return await self.attempt_completed(attempt, payload=payload)
+        return await self.attempt_completed(attempt, payload=event_payload)
 
     async def model_failed(
         self,
         attempt: AttemptHandle,
         error: BaseException,
         *,
-        payload: dict[str, Any] | None = None,
+        payload: CallResponse | None = None,
+        details: dict[str, Any] | None = None,
     ) -> StoredEvent:
+        event_payload = _call_payload(payload or CallResponse(), details)
         _require_action_type(attempt, ActionType.MODEL_CALL)
-        return await self.attempt_failed(attempt, error, payload=payload)
+        return await self.attempt_failed(attempt, error, payload=event_payload)
 
     async def tool_completed(
         self,
         attempt: AttemptHandle,
         *,
-        payload: dict[str, Any] | CallResponse,
+        payload: CallResponse,
+        details: dict[str, Any] | None = None,
     ) -> StoredEvent:
-        if isinstance(payload, CallResponse):
-            payload = payload.model_dump(mode="json", exclude_unset=True)
+        event_payload = _call_payload(payload, details)
         _require_action_type(attempt, ActionType.TOOL_CALL)
-        return await self.attempt_completed(attempt, payload=payload)
+        return await self.attempt_completed(attempt, payload=event_payload)
 
     async def tool_failed(
         self,
         attempt: AttemptHandle,
         error: BaseException,
         *,
-        payload: dict[str, Any] | None = None,
+        payload: CallResponse | None = None,
+        details: dict[str, Any] | None = None,
     ) -> StoredEvent:
+        event_payload = _call_payload(payload or CallResponse(), details)
         _require_action_type(attempt, ActionType.TOOL_CALL)
-        return await self.attempt_failed(attempt, error, payload=payload)
+        return await self.attempt_failed(attempt, error, payload=event_payload)
 
     async def record_action(
         self,
@@ -522,8 +528,20 @@ def _error_payload(
     payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
     return {
-        **(payload or {}),
         "error": CallError(type=type(error).__name__, message=str(error)).model_dump(
             exclude_none=True
         ),
+        **(payload or {}),
     }
+
+
+def _call_payload(
+    facts: CallRequest | CallResponse, details: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Keep event-specific details from overriding shared call facts."""
+    payload = facts.model_dump(mode="json", exclude_unset=True)
+    for key, value in (details or {}).items():
+        if key in CallRequest.model_fields or key in CallResponse.model_fields:
+            raise ValueError(f"event detail {key!r} overlaps shared call facts")
+        payload[key] = value
+    return payload

@@ -1,4 +1,4 @@
-import type { Model, Usage } from "@agent-ledger/common";
+import type { CallRequest, CallResponse, Model, Usage } from "@agent-ledger/common";
 import {
   type AdapterDescriptor,
   type AttemptHandle,
@@ -40,7 +40,7 @@ export function bindPiHarness(harness: PiHarnessLike, recorder: LaneRecorder): (
   }));
   disposers.push(harness.on("before_provider_request", async (event) => {
     if (currentTurn === undefined) throw new Error("Pi model call occurred outside a turn");
-    const payload: { [key: string]: JsonValue } = { input: context };
+    const payload: CallRequest = { input: context };
     const model = modelIdentity(event.model);
     if (model !== undefined) payload.model = model;
     const attempt = await recorder.beforeModelCall(currentTurn.id, payload);
@@ -116,7 +116,7 @@ function asJson(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
-function modelIdentity(model: unknown): { [key: string]: JsonValue } | undefined {
+function modelIdentity(model: unknown): Model | undefined {
   if (typeof model !== "object" || model === null) return undefined;
   const candidate = model as Record<string, unknown>;
   if (typeof candidate.id !== "string" || candidate.id.length === 0) return undefined;
@@ -128,8 +128,8 @@ function modelIdentity(model: unknown): { [key: string]: JsonValue } | undefined
   } satisfies Model;
 }
 
-function modelResult(message: unknown): { [key: string]: JsonValue } {
-  const payload: { [key: string]: JsonValue } = { output: asJson(message) };
+function modelResult(message: unknown): CallResponse {
+  const payload: CallResponse = { output: asJson(message) };
   if (typeof message !== "object" || message === null) return payload;
   const candidate = message as Record<string, unknown>;
   const finishReason = candidate.stopReason ?? candidate.stop_reason;
@@ -143,7 +143,7 @@ function modelResult(message: unknown): { [key: string]: JsonValue } {
   return payload;
 }
 
-function normalizedUsage(value: unknown): { [key: string]: JsonValue } | undefined {
+function normalizedUsage(value: unknown): Usage | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const source = value as Record<string, unknown>;
   const fields: Array<[keyof Usage, string]> = [
