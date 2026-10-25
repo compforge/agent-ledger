@@ -1,6 +1,6 @@
-import { decodeRequest, decodeResponse, callDetails, type JsonValue } from "@agent-ledger/common";
-import { validate, type Document, type Node, type Run, type Turn, type ModelCall, type ToolCall, type Operation, type Status } from "@agent-ledger/view";
-import type { RunView, StoredEvent } from "@agent-ledger/core";
+import { decodeRequest, decodeResponse, callDetails, type JsonValue } from "@compforge/agent-common";
+import { validate, type Document, type Node, type Run, type Turn, type ModelCall, type ToolCall, type Operation, type Status } from "@compforge/agent-view";
+import type { RunView, StoredEvent } from "@compforge/agent-ledger";
 
 const terminal: Record<string, Status> = { completed: "completed", failed: "failed", cancelled: "cancelled", outcome_unknown: "outcome_unknown" };
 /** Read-only projection. Every physical attempt stays visible; no recovery decisions are made. */

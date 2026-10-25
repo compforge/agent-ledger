@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { projectView } from "../src/projection.js";
-import type { RunView } from "@agent-ledger/core";
-import type { ModelCall, ToolCall, Turn } from "@agent-ledger/view";
+import type { RunView } from "@compforge/agent-ledger";
+import type { ModelCall, ToolCall, Turn } from "@compforge/agent-view";
 const fixture = () => JSON.parse(readFileSync(new URL("../../../../../conformance/vectors/view-ledger.json", import.meta.url), "utf8")) as {source: RunView; call_ids: string[]; statuses: string[]};
 
 test("projection preserves retry attempts, parallel Lanes, failures and unresolved calls", () => {
@@ -22,8 +22,8 @@ test("projection preserves retry attempts, parallel Lanes, failures and unresolv
 
 
 test("typed failed calls retain structured evidence through Recorder and View", async () => {
- const {LaneRecorder, MemoryEventStore, newActor} = await import("@agent-ledger/core");
- const {decodeRequest, decodeResponse} = await import("@agent-ledger/common");
+ const {LaneRecorder, MemoryEventStore, newActor} = await import("@compforge/agent-ledger");
+ const {decodeRequest, decodeResponse} = await import("@compforge/agent-common");
  const vector = JSON.parse(readFileSync(new URL("../../../../../conformance/vectors/common-call.json", import.meta.url), "utf8"));
  const store = new MemoryEventStore();
  const recorder = await LaneRecorder.open({store, sessionId: "s", runId: "r", actor: newActor("agent", "test")});

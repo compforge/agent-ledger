@@ -1,11 +1,11 @@
-import type { CallRequest, CallResponse, Model, Usage } from "@agent-ledger/common";
+import type { CallRequest, CallResponse, Model, Usage } from "@compforge/agent-common";
 import {
   type AdapterDescriptor,
   type AttemptHandle,
   type JsonValue,
   LaneRecorder,
   type Turn,
-} from "@agent-ledger/core";
+} from "@compforge/agent-ledger";
 
 export const PI_ADAPTER: AdapterDescriptor = {
   schema_version: "1.0",

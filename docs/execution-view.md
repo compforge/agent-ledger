@@ -107,8 +107,8 @@ document = project_view(recording)
 TypeScript, reading and rendering a Ledger Run:
 
 ```ts
-import { projectView } from "@agent-ledger/ledger-view";
-import { renderHTML } from "@agent-ledger/view";
+import { projectView } from "@compforge/agent-ledger-view";
+import { renderHTML } from "@compforge/agent-view";
 
 const document = projectView(await store.loadRun(sessionId, runId));
 const html = renderHTML(document, "Agent execution");
@@ -141,3 +141,16 @@ The Action/Attempt, Event, Checkpoint and Store wire contracts are unchanged. Re
 use common types, and projection imports use the separate modules shown above. View is a derived
 read model and is never a recovery checkpoint. CCR/Pi/Trace ingestion adapters and richer rendering
 can consume this public contract without changing Ledger write semantics.
+
+## Install and render
+
+Public TypeScript packages use the `@compforge` scope. For a View JSON exported by Trace,
+Trajectory or CCR:
+
+```sh
+npx --package @compforge/agent-view agent-view agent-view.json -o agent-view.html
+```
+
+The CLI uses the same script-free renderer as `renderHTML`; it reads only the supplied file.
+Python consumers must pin this repository when installing from Git: the PyPI distribution named
+`agent-ledger` is a different project.

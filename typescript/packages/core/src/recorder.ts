@@ -1,4 +1,4 @@
-import { requestPayload, responsePayload, callDetails, type CallRequest, type CallResponse, type CallError } from "@agent-ledger/common";
+import { requestPayload, responsePayload, callDetails, type CallRequest, type CallResponse, type CallError } from "@compforge/agent-common";
 import { EntityConflict, EntityNotFound } from "./memory-store.js";
 import type { EventStore } from "./store.js";
 import {

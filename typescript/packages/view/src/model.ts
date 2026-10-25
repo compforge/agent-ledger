@@ -1,4 +1,4 @@
-import { validateRequest, validateResponse, type CallRequest, type CallResponse, type JsonValue } from "@agent-ledger/common";
+import { validateRequest, validateResponse, type CallRequest, type CallResponse, type JsonValue } from "@compforge/agent-common";
 export type Status = "unknown" | "running" | "completed" | "failed" | "cancelled" | "outcome_unknown";
 export interface SourceRef { source: string; id: string; uri?: string }
 export interface Node {
