@@ -4,7 +4,7 @@ import {
   type JsonValue,
   LaneRecorder,
   type StoredEvent,
-} from "@agent-ledger/core";
+} from "@compforge/agent-ledger";
 import type { LeafEntry, SessionMetadata, SessionStorage, SessionTreeEntry } from "@earendil-works/pi-agent-core";
 
 export interface LedgerPiSessionStorageOptions<TMetadata extends SessionMetadata> {

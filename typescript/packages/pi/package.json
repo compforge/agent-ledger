@@ -1,5 +1,5 @@
 {
-  "name": "@agent-ledger/pi",
+  "name": "@compforge/agent-pi",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/src/index.js",
@@ -11,13 +11,32 @@
     }
   },
   "dependencies": {
-    "@agent-ledger/core": "0.1.0",
-    "@agent-ledger/common": "0.1.0"
+    "@compforge/agent-ledger": "0.1.0",
+    "@compforge/agent-common": "0.1.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": ">=0.80 <1"
   },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "0.80.6"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/compforge/agent-ledger.git",
+    "directory": "typescript/packages/pi"
+  },
+  "files": [
+    "dist/src",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "description": "Pi agent harness integration for Agent Ledger"
 }

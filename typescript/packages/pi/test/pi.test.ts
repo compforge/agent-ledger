@@ -8,7 +8,7 @@ import {
   MemoryEventStore,
   newActor,
   type ProposedEvent,
-} from "@agent-ledger/core";
+} from "@compforge/agent-ledger";
 
 import { bindPiHarness, LedgerPiSessionStorage } from "../src/index.js";
 

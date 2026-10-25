@@ -1,5 +1,5 @@
-import type { JsonValue } from "@agent-ledger/common";
-export type { JsonValue } from "@agent-ledger/common";
+import type { JsonValue } from "@compforge/agent-common";
+export type { JsonValue } from "@compforge/agent-common";
 
 export interface Actor {
   id: string;

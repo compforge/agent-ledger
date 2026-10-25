@@ -1,5 +1,5 @@
 {
-  "name": "@agent-ledger/view",
+  "name": "@compforge/agent-view",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/src/index.js",
@@ -11,6 +11,28 @@
     }
   },
   "dependencies": {
-    "@agent-ledger/common": "0.1.0"
+    "@compforge/agent-common": "0.1.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/compforge/agent-ledger.git",
+    "directory": "typescript/packages/view"
+  },
+  "files": [
+    "dist/src",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "description": "Framework-neutral agent execution views and standalone HTML renderer",
+  "bin": {
+    "agent-view": "dist/src/cli.js"
   }
 }

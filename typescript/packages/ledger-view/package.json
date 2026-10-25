@@ -1,5 +1,5 @@
 {
-  "name": "@agent-ledger/ledger-view",
+  "name": "@compforge/agent-ledger-view",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/src/index.js",
@@ -11,8 +11,27 @@
     }
   },
   "dependencies": {
-    "@agent-ledger/common": "0.1.0",
-    "@agent-ledger/view": "0.1.0",
-    "@agent-ledger/core": "0.1.0"
-  }
+    "@compforge/agent-common": "0.1.0",
+    "@compforge/agent-view": "0.1.0",
+    "@compforge/agent-ledger": "0.1.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/compforge/agent-ledger.git",
+    "directory": "typescript/packages/ledger-view"
+  },
+  "files": [
+    "dist/src",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "description": "Agent Ledger to execution View projection"
 }
