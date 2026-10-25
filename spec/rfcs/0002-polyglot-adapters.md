@@ -114,7 +114,7 @@ steering/follow-up queues. Custom `AgentMessage` implementations register with t
 codec supplied to the Adapter. The default AgentGo codec supports built-in state types and rejects
 unknown values instead of silently lowering them.
 
-Recovery does not splice normalized Events into a transcript. `BeforeRun` restores the admission
+Recovery does not splice normalized Events into a transcript. `SnapshotLoader` restores the admission
 Snapshot, then model and tool middleware return completed outcomes as their normal result while the
 AgentGo Loop runs again. This preserves AgentGo's message commit, tool-result construction, progress,
 and context-management rules. Every request carries a semantic fingerprint; a stable Execution ID

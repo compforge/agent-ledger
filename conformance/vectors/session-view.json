@@ -1,0 +1,103 @@
+{
+  "schema_version": "agent-ledger/session-view@1",
+  "session": {
+    "source": "fixture",
+    "id": "native-session"
+  },
+  "items": [
+    {
+      "kind": "input",
+      "id": "input-1",
+      "mode": "followup",
+      "content": [
+        {
+          "role": "user",
+          "content": "<script>alert(1)</script>"
+        }
+      ]
+    },
+    {
+      "kind": "turn",
+      "id": "turn-1",
+      "items": [
+        {
+          "kind": "model_call",
+          "id": "m1",
+          "request": {
+            "model": {
+              "id": "model"
+            },
+            "input": {
+              "messages": [
+                {
+                  "role": "system",
+                  "content": "rules"
+                },
+                {
+                  "role": "developer",
+                  "content": "scope"
+                },
+                {
+                  "role": "user",
+                  "content": "one"
+                },
+                {
+                  "role": "user",
+                  "content": "two"
+                }
+              ],
+              "tools": [
+                {
+                  "name": "read"
+                }
+              ]
+            }
+          },
+          "response": {
+            "output": {
+              "role": "assistant",
+              "content": "read it"
+            },
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 2
+            }
+          },
+          "status": "completed"
+        },
+        {
+          "kind": "tool_call",
+          "id": "t1",
+          "model_call_id": "m1",
+          "tool_call_id": "native-tool",
+          "request": {
+            "tool_name": "read",
+            "input": null
+          },
+          "status": "outcome_unknown",
+          "sessions": [
+            {
+              "source": "fixture",
+              "id": "child"
+            }
+          ]
+        },
+        {
+          "kind": "tool_call",
+          "id": "t2",
+          "request": {
+            "tool_name": "read",
+            "input_artifact_id": "body-ref"
+          },
+          "evidence": [
+            {
+              "source": "session",
+              "id": "line:4",
+              "uri": "file:///recording.jsonl"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

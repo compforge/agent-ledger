@@ -52,7 +52,7 @@ const error: Validator = value => {
  if (fields.retryable !== undefined && typeof fields.retryable !== "boolean") throw new Error("expected retryable boolean");
 };
 // +spec=Every shared field has one codec used by both Recorder and View
-// +link=docs/execution-view.md
+// +link=docs/observation.md
 const requestFields: Record<keyof CallRequest, Validator> = {
  input: native, input_artifact_id: string, model, tool_name: string, client_request_id: string,
 };
@@ -102,3 +102,6 @@ export function validateResponse(facts: CallResponse): void {
  validateFields(facts, responseFields);
  if (facts.output !== undefined && facts.output_artifact_id !== undefined) throw new Error("ambiguous response content");
 }
+
+/** Source-scoped identity of one continuing agent session, independent of business task IDs. */
+export interface SessionRef { source: string; id: string }

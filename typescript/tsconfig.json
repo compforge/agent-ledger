@@ -5,16 +5,13 @@
       "path": "./packages/common"
     },
     {
-      "path": "./packages/view"
+      "path": "./packages/observation"
     },
     {
       "path": "./packages/core"
     },
     {
       "path": "./packages/pi"
-    },
-    {
-      "path": "./packages/ledger-view"
     }
   ]
 }

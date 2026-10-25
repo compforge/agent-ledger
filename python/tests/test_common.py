@@ -7,7 +7,7 @@ import pytest
 from pydantic import Field
 
 from agent_ledger.common import CallRequest, CallResponse, Fact, call_details
-from agent_ledger.view.models import Input, Operation
+from agent_ledger.observation.models import Input, Operation
 
 
 def test_common_roundtrip_keeps_null_zero_and_source_details():
@@ -39,8 +39,8 @@ def test_ledger_does_not_import_view_or_projection():
             sys.executable,
             "-c",
             "import sys, agent_ledger; "
-            "assert 'agent_ledger.view' not in sys.modules; "
-            "assert 'agent_ledger.projections.view' not in sys.modules",
+            "assert 'agent_ledger.observation' not in sys.modules; "
+            "assert 'agent_ledger.ledger.observation' not in sys.modules",
         ],
         check=True,
     )

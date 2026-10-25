@@ -10,7 +10,7 @@ import {
   type ProposedEvent,
 } from "@compforge/agent-ledger";
 
-import { bindPiHarness, LedgerPiSessionStorage } from "../src/index.js";
+import { bindPiHarness, LedgerPiSessionStorage } from "../src/ledger/index.js";
 
 test("Pi native entries round-trip through a framework lane", async () => {
   const store = new MemoryEventStore();

@@ -23,7 +23,7 @@ Actor ────────────────────────�
 
 | Concept | Meaning |
 | --- | --- |
-| Session | One end-to-end task owned and identified by an upstream orchestrator. |
+| Session | One continuing agent interaction identified by its upstream owner; it can span several Runs. |
 | Run | An upstream-defined grouping of one or more Lanes inside a Session. Ledger does not define its domain meaning or lifecycle. |
 | Lane | One serial execution line inside a Run and the boundary for ordering and optimistic concurrency. |
 | Turn | One stable interaction or checkpoint boundary inside a Lane. |
