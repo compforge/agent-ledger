@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@compforge/agent-ledger": "0.1.0",
-    "@compforge/agent-common": "0.1.0",
+    "@compforge/agent-common": "0.1.1",
     "@compforge/agent-observation": "0.1.0"
   },
   "peerDependencies": {
