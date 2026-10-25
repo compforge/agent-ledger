@@ -6,6 +6,7 @@ from typing import Any, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_ledger.common import CallError, CallRequest, CallResponse
 from agent_ledger.errors import EntityConflict, EntityNotFound
 from agent_ledger.models import (
     Action,
@@ -225,8 +226,10 @@ class LaneRecorder:
         self,
         turn: Turn | str,
         *,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | CallRequest,
     ) -> AttemptHandle:
+        if isinstance(payload, CallRequest):
+            payload = payload.model_dump(mode="json", exclude_unset=True)
         return await self._before_call(
             ActionType.MODEL_CALL,
             _entity_id(turn),
@@ -239,9 +242,11 @@ class LaneRecorder:
         turn: Turn | str,
         *,
         action_key: str,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | CallRequest,
         effect: Effect | None = None,
     ) -> AttemptHandle:
+        if isinstance(payload, CallRequest):
+            payload = payload.model_dump(mode="json", exclude_unset=True)
         if not action_key:
             raise ValueError("tool_call requires an action key")
         return await self._before_call(
@@ -330,8 +335,10 @@ class LaneRecorder:
         self,
         attempt: AttemptHandle,
         *,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | CallResponse,
     ) -> StoredEvent:
+        if isinstance(payload, CallResponse):
+            payload = payload.model_dump(mode="json", exclude_unset=True)
         _require_action_type(attempt, ActionType.MODEL_CALL)
         return await self.attempt_completed(attempt, payload=payload)
 
@@ -349,8 +356,10 @@ class LaneRecorder:
         self,
         attempt: AttemptHandle,
         *,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | CallResponse,
     ) -> StoredEvent:
+        if isinstance(payload, CallResponse):
+            payload = payload.model_dump(mode="json", exclude_unset=True)
         _require_action_type(attempt, ActionType.TOOL_CALL)
         return await self.attempt_completed(attempt, payload=payload)
 
@@ -514,5 +523,7 @@ def _error_payload(
 ) -> dict[str, Any]:
     return {
         **(payload or {}),
-        "error": {"type": type(error).__name__, "message": str(error)},
+        "error": CallError(type=type(error).__name__, message=str(error)).model_dump(
+            exclude_none=True
+        ),
     }

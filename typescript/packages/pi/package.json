@@ -11,7 +11,8 @@
     }
   },
   "dependencies": {
-    "@agent-ledger/core": "0.1.0"
+    "@agent-ledger/core": "0.1.0",
+    "@agent-ledger/common": "0.1.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": ">=0.80 <1"

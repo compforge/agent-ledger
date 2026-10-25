@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/compforge/agent-ledger/go"
+	callfacts "github.com/compforge/agent-ledger/go/common"
 	"github.com/compforge/agentgo"
 )
 
@@ -127,28 +128,19 @@ func modelObservationPayload(message agentgo.Message) map[string]any {
 	if message.Usage == nil {
 		return payload
 	}
-	payload["usage"] = map[string]any{
-		"input_tokens":             message.Usage.Input,
-		"output_tokens":            message.Usage.Output,
-		"cache_read_input_tokens":  message.Usage.CacheRead,
-		"cache_write_input_tokens": message.Usage.CacheWrite,
-		"total_tokens":             message.Usage.TotalTokens,
-	}
+	input, output, read, write, total := int64(message.Usage.Input), int64(message.Usage.Output), int64(message.Usage.CacheRead), int64(message.Usage.CacheWrite), int64(message.Usage.TotalTokens)
+	payload["usage"] = &callfacts.Usage{InputTokens: &input, OutputTokens: &output, CacheReadInputTokens: &read, CacheWriteInputTokens: &write, TotalTokens: &total}
 	if model := modelPayload(message.Usage.Provider, message.Usage.Model); model != nil {
 		payload["model"] = model
 	}
 	return payload
 }
 
-func modelPayload(provider, modelName string) map[string]any {
+func modelPayload(provider, modelName string) *callfacts.Model {
 	if modelName == "" {
 		return nil
 	}
-	model := map[string]any{"id": modelName}
-	if provider != "" {
-		model["provider"] = provider
-	}
-	return model
+	return &callfacts.Model{ID: modelName, Provider: provider}
 }
 
 func decodePayload(value any, target any) error {

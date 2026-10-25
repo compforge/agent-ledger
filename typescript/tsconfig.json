@@ -1,7 +1,17 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/core" },
-    { "path": "./packages/pi" }
+    {
+      "path": "./packages/common"
+    },
+    {
+      "path": "./packages/view"
+    },
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/pi"
+    }
   ]
 }

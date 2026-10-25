@@ -1,4 +1,5 @@
-export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+import type { JsonValue } from "@agent-ledger/common";
+export type { JsonValue } from "@agent-ledger/common";
 
 export interface Actor {
   id: string;

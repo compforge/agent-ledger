@@ -26,3 +26,10 @@ and unresolved Attempt without deriving orchestrator control state.
 Strict Adapter suites inject failures before model calls, before tools, after external outcomes, and
 during native-state restoration. Passing these vectors and behaviors is required before an SDK can
 claim Agent Ledger schema `1.x` compatibility.
+
+## Shared execution View
+
+`view.json` is a native View round-trip fixture; `view-ledger.json` projects the same retries,
+parallel Lanes and incomplete outcomes through every SDK. Shared call definitions live in
+`common.schema.json`; Ledger payload profiles and `view.schema.json` reference them.
+Validation retains absent values and explicit zero/null without inventing timing or recovery state.

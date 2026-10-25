@@ -20,14 +20,18 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 ├── spec/                         # 协议的唯一规范来源
 │   ├── rfcs/                     # 对象、追加、Adapter 与恢复边界
 │   └── schemas/                  # Event、Adapter descriptor 与参考 SQL
-├── docs/                         # Checkpoint 等聚焦主题的设计说明
+├── docs/                         # Checkpoint、共享执行语义与 View 的设计说明
 ├── conformance/                  # 跨语言 canonical encoding 与 digest 向量
 ├── python/                       # Python Core；Memory、Redis、SQLAlchemy Stores
 ├── typescript/
 │   └── packages/
-│       ├── core/                 # TypeScript Core 与 Memory Store
+│       ├── common/            # 共享调用事实；无存储或渲染依赖
+│       ├── view/                 # 执行读模型、校验与 HTML 渲染
+│       ├── core/                 # TypeScript Core、Memory Store 与 Ledger → View 投影
 │       └── pi/                   # Pi hooks 与原生 SessionStorage Lane
 └── go/                           # Go Core 与公共 LaneRecorder
+    ├── common/               # 共享模型身份、请求/响应、Usage 与 Error
+    ├── view/                    # 无 Store 依赖的执行读模型
     ├── adapters/agentgo/         # AgentGo 记录与原生恢复适配
     └── stores/
         ├── bolt/                 # 单文件 KV Store
@@ -59,6 +63,10 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 10. `RunView` 是按上游 `(session_id, run_id)` 查询的执行读模型，不创建权威 Run 行；Run inspection
     只汇总终态事实、Checkpoint link 和未决 Attempt，不选择控制状态或恢复策略。
 
+11. `common` 共享调用事实；`view` 组织 Run/Turn/Input/调用/Operation 并渲染。View 不要求
+    Ledger ingestion、UUID 或 Action/Attempt 层级。`RunView` 仍是 Ledger 查询结果，`view.Run` 是
+    展示结构。投影保留 Lane 顺序、每次物理调用、冲突终态和证据缺口，不作恢复决策。
+
 ## 开发约定
 
 - 修改对象模型或 append 契约时，同步检查 JSON Schema、RFC、参考 SQL、跨语言类型、digest
@@ -77,9 +85,12 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 - `README.md` — 使用者视角的项目定位、模型和最短开发入口
 - `spec/rfcs/0001-agent-ledger.md` — Ledger 核心契约、因果模型与读侧投影
 - `spec/rfcs/0002-polyglot-adapters.md` — 多语言 Adapter、能力声明与恢复边界
+- `docs/execution-view.md` — 共享调用契约、Ledger/View 边界与使用方式
 - `docs/checkpoint.md` — Checkpoint 对象、保存契约、Ledger 锚点与组合恢复
 - `spec/schemas/event.schema.json` — Event envelope
 - `spec/schemas/artifact.schema.json` — Artifact identity and immutable version metadata
+- `spec/schemas/common.schema.json` — Ledger/View 共享调用事实
+- `spec/schemas/view.schema.json` — 执行读模型与跨语言展示契约
 - `spec/schemas/call-payload.schema.json` — Core model/tool Attempt payload profiles
 - `spec/schemas/checkpoint.schema.json` — Checkpoint envelope
 - `spec/schemas/mysql.sql` — 无外键的参考关系型 Schema

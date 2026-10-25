@@ -7,37 +7,9 @@
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
-    "model": {
-      "type": "object",
-      "required": ["id"],
-      "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "provider": { "type": "string", "minLength": 1 }
-      },
-      "additionalProperties": false
-    },
-    "usage": {
-      "type": "object",
-      "properties": {
-        "input_tokens": { "type": "integer", "minimum": 0 },
-        "output_tokens": { "type": "integer", "minimum": 0 },
-        "cache_read_input_tokens": { "type": "integer", "minimum": 0 },
-        "cache_write_input_tokens": { "type": "integer", "minimum": 0 },
-        "total_tokens": { "type": "integer", "minimum": 0 }
-      },
-      "additionalProperties": false
-    },
-    "error": {
-      "type": "object",
-      "required": ["type", "message"],
-      "properties": {
-        "type": { "type": "string", "minLength": 1 },
-        "message": { "type": "string" },
-        "code": { "type": "string", "minLength": 1 },
-        "retryable": { "type": "boolean" }
-      },
-      "additionalProperties": false
-    },
+    "model": { "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/model" },
+    "usage": { "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/usage" },
+    "error": { "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/error" },
     "model_call_attempt_requested": {
       "type": "object",
       "properties": {

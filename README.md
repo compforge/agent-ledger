@@ -169,3 +169,17 @@ make build
 
 See [RFC 0001](spec/rfcs/0001-agent-ledger.md) for the core contract and
 [RFC 0002](spec/rfcs/0002-polyglot-adapters.md) for adapter boundaries.
+
+## Execution View
+
+The shared `common` types describe model identity, native call content, usage and errors.
+Ledger records these facts durably; View organizes them for inspection without requiring a Ledger
+Store, UUID identifiers or an Action/Attempt hierarchy. Native Session and Trace adapters can
+construct View directly.
+
+- Go: `common` and `view` subpackages; `agentledger.ProjectView` projects a loaded Run.
+- Python: `agent_ledger.common`, `agent_ledger.view`, and `agent_ledger.project_view`.
+- TypeScript: `@agent-ledger/common`, `@agent-ledger/view`, and Core's `projectView`.
+
+The TypeScript View package renders a standalone HTML document from the same JSON contract used
+by all three SDKs. See [Execution View](docs/execution-view.md) for the model and examples.

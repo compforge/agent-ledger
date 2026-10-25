@@ -1,0 +1,330 @@
+{
+  "source": {
+    "session_id": "s",
+    "run_id": "r",
+    "actors": [
+      {
+        "id": "018f0f43-7b9a-7cc1-8000-000000000001",
+        "type": "harness",
+        "created_at": "2026-10-25T00:00:00Z"
+      }
+    ],
+    "lanes": [
+      {
+        "id": "018f0f43-7b9a-7cc1-8000-000000000002",
+        "session_id": "s",
+        "run_id": "r",
+        "name": "main",
+        "last_seq": 8,
+        "created_at": "2026-10-25T00:00:00Z"
+      },
+      {
+        "id": "018f0f43-7b9a-7cc1-8000-000000000003",
+        "session_id": "s",
+        "run_id": "r",
+        "name": "parallel",
+        "last_seq": 3,
+        "created_at": "2026-10-25T00:00:00Z"
+      }
+    ],
+    "turns": [
+      {
+        "id": "018f0f43-7b9a-7cc1-8000-000000000004",
+        "lane_id": "018f0f43-7b9a-7cc1-8000-000000000002",
+        "created_at": "2026-10-25T00:00:00Z"
+      },
+      {
+        "id": "018f0f43-7b9a-7cc1-8000-000000000005",
+        "lane_id": "018f0f43-7b9a-7cc1-8000-000000000003",
+        "created_at": "2026-10-25T00:00:00Z"
+      }
+    ],
+    "actions": [
+      {
+        "id": "018f0f43-7b9a-7cc1-8000-000000000006",
+        "turn_id": "018f0f43-7b9a-7cc1-8000-000000000004",
+        "type": "model_call",
+        "key": "tool-0",
+        "effect": {
+          "kind": "unknown",
+          "idempotency": "unknown"
+        },
+        "created_at": "2026-10-25T00:00:00Z"
+      },
+      {
+        "id": "018f0f43-7b9a-7cc1-8000-000000000007",
+        "turn_id": "018f0f43-7b9a-7cc1-8000-000000000004",
+        "type": "tool_call",
+        "key": "tool-1",
+        "effect": {
+          "kind": "unknown",
+          "idempotency": "unknown"
+        },
+        "created_at": "2026-10-25T00:00:00Z"
+      },
+      {
+        "id": "018f0f43-7b9a-7cc1-8000-000000000008",
+        "turn_id": "018f0f43-7b9a-7cc1-8000-000000000005",
+        "type": "tool_call",
+        "key": "tool-2",
+        "effect": {
+          "kind": "unknown",
+          "idempotency": "unknown"
+        },
+        "created_at": "2026-10-25T00:00:00Z"
+      }
+    ],
+    "attempts": [
+      {
+        "id": "018f0f43-7b9a-7cc1-8000-000000000009",
+        "action_id": "018f0f43-7b9a-7cc1-8000-000000000006",
+        "attempt_no": 1,
+        "created_at": "2026-10-25T00:00:00Z"
+      },
+      {
+        "id": "018f0f43-7b9a-7cc1-8000-000000000010",
+        "action_id": "018f0f43-7b9a-7cc1-8000-000000000006",
+        "attempt_no": 2,
+        "created_at": "2026-10-25T00:00:00Z"
+      },
+      {
+        "id": "018f0f43-7b9a-7cc1-8000-000000000011",
+        "action_id": "018f0f43-7b9a-7cc1-8000-000000000007",
+        "attempt_no": 1,
+        "created_at": "2026-10-25T00:00:00Z"
+      },
+      {
+        "id": "018f0f43-7b9a-7cc1-8000-000000000012",
+        "action_id": "018f0f43-7b9a-7cc1-8000-000000000008",
+        "attempt_no": 1,
+        "created_at": "2026-10-25T00:00:00Z"
+      }
+    ],
+    "events": [
+      {
+        "schema_version": "1.0",
+        "id": "018f0f43-7b9a-7cc1-8000-000000000030",
+        "lane_id": "018f0f43-7b9a-7cc1-8000-000000000003",
+        "subject_id": "018f0f43-7b9a-7cc1-8000-000000000012",
+        "event_type": "attempt.outcome_unknown",
+        "actor_id": "018f0f43-7b9a-7cc1-8000-000000000001",
+        "occurred_at": "2026-10-25T00:00:03Z",
+        "payload": {
+          "reason": "connection lost"
+        },
+        "extensions": {},
+        "seq": 3,
+        "committed_at": "2026-10-25T00:00:10Z"
+      },
+      {
+        "schema_version": "1.0",
+        "id": "018f0f43-7b9a-7cc1-8000-000000000029",
+        "lane_id": "018f0f43-7b9a-7cc1-8000-000000000003",
+        "subject_id": "018f0f43-7b9a-7cc1-8000-000000000012",
+        "event_type": "attempt.requested",
+        "actor_id": "018f0f43-7b9a-7cc1-8000-000000000001",
+        "occurred_at": "2026-10-25T00:00:02Z",
+        "payload": {
+          "tool_name": "send",
+          "input": null
+        },
+        "extensions": {},
+        "seq": 2,
+        "committed_at": "2026-10-25T00:00:09Z"
+      },
+      {
+        "schema_version": "1.0",
+        "id": "018f0f43-7b9a-7cc1-8000-000000000028",
+        "lane_id": "018f0f43-7b9a-7cc1-8000-000000000003",
+        "subject_id": "018f0f43-7b9a-7cc1-8000-000000000005",
+        "event_type": "turn.started",
+        "actor_id": "018f0f43-7b9a-7cc1-8000-000000000001",
+        "occurred_at": "2026-10-25T00:00:01Z",
+        "payload": {},
+        "extensions": {},
+        "seq": 1,
+        "committed_at": "2026-10-25T00:00:08Z"
+      },
+      {
+        "schema_version": "1.0",
+        "id": "018f0f43-7b9a-7cc1-8000-000000000027",
+        "lane_id": "018f0f43-7b9a-7cc1-8000-000000000002",
+        "subject_id": "018f0f43-7b9a-7cc1-8000-000000000002",
+        "event_type": "lane.vendor.notice",
+        "actor_id": "018f0f43-7b9a-7cc1-8000-000000000001",
+        "occurred_at": "2026-10-25T00:00:07Z",
+        "payload": {
+          "opaque": [
+            1,
+            2,
+            3
+          ]
+        },
+        "extensions": {},
+        "seq": 8,
+        "committed_at": "2026-10-25T00:00:07Z"
+      },
+      {
+        "schema_version": "1.0",
+        "id": "018f0f43-7b9a-7cc1-8000-000000000026",
+        "lane_id": "018f0f43-7b9a-7cc1-8000-000000000002",
+        "subject_id": "018f0f43-7b9a-7cc1-8000-000000000011",
+        "event_type": "attempt.requested",
+        "actor_id": "018f0f43-7b9a-7cc1-8000-000000000001",
+        "occurred_at": "2026-10-25T00:00:06Z",
+        "payload": {
+          "tool_name": "write",
+          "input": {
+            "path": "file"
+          },
+          "idempotency_key": "key"
+        },
+        "extensions": {},
+        "seq": 7,
+        "committed_at": "2026-10-25T00:00:06Z"
+      },
+      {
+        "schema_version": "1.0",
+        "id": "018f0f43-7b9a-7cc1-8000-000000000025",
+        "lane_id": "018f0f43-7b9a-7cc1-8000-000000000002",
+        "subject_id": "018f0f43-7b9a-7cc1-8000-000000000010",
+        "event_type": "attempt.completed",
+        "actor_id": "018f0f43-7b9a-7cc1-8000-000000000001",
+        "occurred_at": "2026-10-25T00:00:05Z",
+        "payload": {
+          "output": {
+            "role": "assistant",
+            "content": "ok"
+          },
+          "usage": {
+            "output_tokens": 2
+          }
+        },
+        "extensions": {},
+        "seq": 6,
+        "committed_at": "2026-10-25T00:00:05Z"
+      },
+      {
+        "schema_version": "1.0",
+        "id": "018f0f43-7b9a-7cc1-8000-000000000024",
+        "lane_id": "018f0f43-7b9a-7cc1-8000-000000000002",
+        "subject_id": "018f0f43-7b9a-7cc1-8000-000000000010",
+        "event_type": "attempt.requested",
+        "actor_id": "018f0f43-7b9a-7cc1-8000-000000000001",
+        "occurred_at": "2026-10-25T00:00:04Z",
+        "payload": {
+          "input": {
+            "messages": [
+              {
+                "role": "user",
+                "content": "retry"
+              }
+            ]
+          }
+        },
+        "extensions": {},
+        "seq": 5,
+        "committed_at": "2026-10-25T00:00:04Z"
+      },
+      {
+        "schema_version": "1.0",
+        "id": "018f0f43-7b9a-7cc1-8000-000000000023",
+        "lane_id": "018f0f43-7b9a-7cc1-8000-000000000002",
+        "subject_id": "018f0f43-7b9a-7cc1-8000-000000000009",
+        "event_type": "attempt.failed",
+        "actor_id": "018f0f43-7b9a-7cc1-8000-000000000001",
+        "occurred_at": "2026-10-25T00:00:03Z",
+        "payload": {
+          "error": {
+            "type": "timeout",
+            "message": "partial request"
+          },
+          "usage": {
+            "input_tokens": 8
+          }
+        },
+        "extensions": {},
+        "seq": 4,
+        "committed_at": "2026-10-25T00:00:03Z"
+      },
+      {
+        "schema_version": "1.0",
+        "id": "018f0f43-7b9a-7cc1-8000-000000000022",
+        "lane_id": "018f0f43-7b9a-7cc1-8000-000000000002",
+        "subject_id": "018f0f43-7b9a-7cc1-8000-000000000009",
+        "event_type": "attempt.requested",
+        "actor_id": "018f0f43-7b9a-7cc1-8000-000000000001",
+        "occurred_at": "2026-10-25T00:00:02Z",
+        "payload": {
+          "input": {
+            "messages": [
+              {
+                "role": "system",
+                "content": "rules"
+              },
+              {
+                "role": "user",
+                "content": "one"
+              },
+              {
+                "role": "user",
+                "content": "two"
+              }
+            ]
+          },
+          "model": {
+            "id": "model"
+          }
+        },
+        "extensions": {},
+        "seq": 3,
+        "committed_at": "2026-10-25T00:00:02Z"
+      },
+      {
+        "schema_version": "1.0",
+        "id": "018f0f43-7b9a-7cc1-8000-000000000021",
+        "lane_id": "018f0f43-7b9a-7cc1-8000-000000000002",
+        "subject_id": "018f0f43-7b9a-7cc1-8000-000000000004",
+        "event_type": "turn.started",
+        "actor_id": "018f0f43-7b9a-7cc1-8000-000000000001",
+        "occurred_at": "2026-10-25T00:00:01Z",
+        "payload": {},
+        "extensions": {},
+        "seq": 2,
+        "committed_at": "2026-10-25T00:00:01Z"
+      },
+      {
+        "schema_version": "1.0",
+        "id": "018f0f43-7b9a-7cc1-8000-000000000020",
+        "lane_id": "018f0f43-7b9a-7cc1-8000-000000000002",
+        "subject_id": "r",
+        "event_type": "run.started",
+        "actor_id": "018f0f43-7b9a-7cc1-8000-000000000001",
+        "occurred_at": "2026-10-25T00:00:00Z",
+        "payload": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "review"
+            }
+          ]
+        },
+        "extensions": {},
+        "seq": 1,
+        "committed_at": "2026-10-25T00:00:00Z"
+      }
+    ]
+  },
+  "call_ids": [
+    "call:018f0f43-7b9a-7cc1-8000-000000000009",
+    "call:018f0f43-7b9a-7cc1-8000-000000000010",
+    "call:018f0f43-7b9a-7cc1-8000-000000000011",
+    "call:018f0f43-7b9a-7cc1-8000-000000000012"
+  ],
+  "statuses": [
+    "failed",
+    "completed",
+    "unknown",
+    "outcome_unknown"
+  ]
+}
