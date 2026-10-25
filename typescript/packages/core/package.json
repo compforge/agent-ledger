@@ -8,10 +8,15 @@
     ".": {
       "types": "./dist/src/index.d.ts",
       "import": "./dist/src/index.js"
+    },
+    "./observation": {
+      "types": "./dist/src/observation.d.ts",
+      "import": "./dist/src/observation.js"
     }
   },
   "dependencies": {
-    "@compforge/agent-common": "0.1.0"
+    "@compforge/agent-common": "0.1.0",
+    "@compforge/agent-observation": "0.1.0"
   },
   "license": "MIT",
   "repository": {

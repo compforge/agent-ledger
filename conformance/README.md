@@ -27,11 +27,11 @@ Strict Adapter suites inject failures before model calls, before tools, after ex
 during native-state restoration. Passing these vectors and behaviors is required before an SDK can
 claim Agent Ledger schema `1.x` compatibility.
 
-## Shared execution View
+## Session observation
 
-`view.json` is a native View round-trip fixture; `view-ledger.json` projects the same retries,
+`session-view.json` is a single-Session round-trip fixture; `view-ledger.json` projects the same retries,
 parallel Lanes and incomplete outcomes through every SDK. Shared call definitions live in
-`common.schema.json`; Ledger payload profiles and `view.schema.json` reference them.
+`common.schema.json`; Ledger payload profiles and `session-view.schema.json` reference them.
 Validation retains absent values and explicit zero/null without inventing timing or recovery state.
 
 - `vectors/common-call.json`: common request/response codecs preserve null, zero usage and separate source-specific details across all three SDKs.

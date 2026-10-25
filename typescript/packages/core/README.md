@@ -2,4 +2,4 @@
 
 Durable agent execution ledger and storage contracts.
 
-See the [execution view guide](https://github.com/compforge/agent-ledger/blob/main/docs/execution-view.md).
+See the [execution view guide](https://github.com/compforge/agent-ledger/blob/main/docs/observation.md).

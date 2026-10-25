@@ -1,0 +1,429 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "agent-ledger/session-view@1"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "session": {
+      "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/item"
+      }
+    },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/lane"
+      }
+    },
+    "attributes": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "session",
+    "items"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/session-view.schema.json",
+  "title": "SessionView",
+  "$defs": {
+    "source": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "lane": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "input": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "lane_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "enum": [
+            "unknown",
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+            "outcome_unknown"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "attributes": {
+          "type": "object"
+        },
+        "kind": {
+          "const": "input"
+        },
+        "mode": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content": {},
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "model_call": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "lane_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "enum": [
+            "unknown",
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+            "outcome_unknown"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "attributes": {
+          "type": "object"
+        },
+        "kind": {
+          "const": "model_call"
+        },
+        "request": {
+          "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/request"
+        },
+        "response": {
+          "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/response"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "tool_call": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "lane_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "enum": [
+            "unknown",
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+            "outcome_unknown"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "attributes": {
+          "type": "object"
+        },
+        "kind": {
+          "const": "tool_call"
+        },
+        "request": {
+          "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/request"
+        },
+        "response": {
+          "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/response"
+        },
+        "tool_call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
+          }
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "operation": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "lane_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "enum": [
+            "unknown",
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+            "outcome_unknown"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "attributes": {
+          "type": "object"
+        },
+        "kind": {
+          "const": "operation"
+        },
+        "operation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {},
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/item"
+          }
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "operation"
+      ],
+      "additionalProperties": false
+    },
+    "turn": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "lane_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "enum": [
+            "unknown",
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+            "outcome_unknown"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "attributes": {
+          "type": "object"
+        },
+        "kind": {
+          "const": "turn"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/item"
+          }
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "items"
+      ],
+      "additionalProperties": false
+    },
+    "item": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/input"
+        },
+        {
+          "$ref": "#/$defs/model_call"
+        },
+        {
+          "$ref": "#/$defs/tool_call"
+        },
+        {
+          "$ref": "#/$defs/operation"
+        },
+        {
+          "$ref": "#/$defs/turn"
+        }
+      ]
+    }
+  }
+}

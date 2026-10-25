@@ -93,3 +93,10 @@ def call_details(payload: dict[str, Any]) -> dict[str, Any]:
         for k, v in payload.items()
         if k not in CallRequest.model_fields and k not in CallResponse.model_fields
     }
+
+
+class SessionRef(Fact):
+    """Source-scoped identity of one continuing agent session."""
+
+    source: str = Field(min_length=1)
+    id: str = Field(min_length=1)

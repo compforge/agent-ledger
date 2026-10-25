@@ -152,7 +152,7 @@ options := append(baseOptions, adapter.Options()...)
 agent := agentgo.NewAgent(options...)
 ```
 
-`BeforeRun` restores the native `AgentSnapshot`. Completed model and tool outcomes are returned by
+`SnapshotLoader` restores the native `AgentSnapshot`; `BeforeRun` initializes materials afterward. Completed model and tool outcomes are returned by
 middleware to the AgentGo Loop, which rebuilds its own messages and progress without repeating the
 provider call or tool side effect. An unresolved tool blocks admission by default; a caller may
 authorize one retry with a caller-owned `recovery_decision_id`. The host still owns its durable
@@ -170,16 +170,20 @@ make build
 See [RFC 0001](spec/rfcs/0001-agent-ledger.md) for the core contract and
 [RFC 0002](spec/rfcs/0002-polyglot-adapters.md) for adapter boundaries.
 
-## Execution View
+## Session recoverability and observability
 
-The shared `common` types describe model identity, native call content, usage and errors.
-Ledger records these facts durably; View organizes them for inspection without requiring a Ledger
-Store, UUID identifiers or an Action/Attempt hierarchy. Native Session and Trace adapters can
-construct View directly.
+`common` holds shared execution facts. `ledger` supports Session recoverability with durable Events,
+Action/Attempt identity and Checkpoints. `observation` supports Session observability; its current
+main capability, `SessionView`, follows one Session across inputs and loop runs for rendering and
+analysis. It accepts native evidence without a Ledger Store.
 
-- Go: `common` and `view` subpackages; `projections/ledgerview.Project` projects a loaded Run.
-- Python: `agent_ledger.common`, `agent_ledger.view`, and `agent_ledger.projections.view.project_view`.
-- TypeScript: `@compforge/agent-common`, `@compforge/agent-view`, and `@compforge/agent-ledger-view`.
+- Python: `agent_ledger.common`, `agent_ledger.observation`, `agent_ledger.ledger.observation`.
+- Go: `common`, `observation`, and the optional `ledger/observation` read-side entrypoint.
+- TypeScript: `@compforge/agent-common`, `@compforge/agent-ledger`, `@compforge/agent-observation`.
 
-The TypeScript View package renders a standalone HTML document from the same JSON contract used
-by all three SDKs. See [Execution View](docs/execution-view.md) for the model and examples.
+Library-specific adaptation lives together: `@compforge/agent-pi/ledger` and `/observation` for Pi;
+`go/agentgo/ledger` and `/observation` for AgentGo. Generic Ledger conversion is an optional entrypoint
+inside Ledger, not a separate package. Same-named types with different purposes remain scoped to
+their package; consumers alias them where needed.
+
+See [Session observation](docs/observation.md) for the model, independent entrypoints and rendering.

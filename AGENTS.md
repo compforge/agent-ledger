@@ -20,21 +20,20 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 ├── spec/                         # 协议的唯一规范来源
 │   ├── rfcs/                     # 对象、追加、Adapter 与恢复边界
 │   └── schemas/                  # Event、Adapter descriptor 与参考 SQL
-├── docs/                         # Checkpoint、共享执行语义与 View 的设计说明
+├── docs/                         # Checkpoint、共享事实与 Observation 的设计说明
 ├── conformance/                  # 跨语言 canonical encoding 与 digest 向量
 ├── python/                       # Python Core；Memory、Redis、SQLAlchemy Stores
 ├── typescript/
 │   └── packages/
 │       ├── common/               # 共享调用事实；无存储或渲染依赖
-│       ├── view/                 # 执行读模型、校验与 HTML 渲染
+│       ├── observation/          # Session 可观测；当前提供 SessionView、校验与渲染
 │       ├── core/                 # TypeScript Core 与 Memory Store
-│       ├── ledger-view/          # 可选的 Ledger → View 转换，同时依赖两者
-│       └── pi/                   # Pi hooks 与原生 SessionStorage Lane
+│       └── pi/                   # ledger / observation 两个独立入口
 └── go/                           # Go Core 与公共 LaneRecorder
-    ├── common/               # 共享模型身份、请求/响应、Usage 与 Error
-    ├── view/                    # 无 Store 依赖的执行读模型
-    ├── projections/ledgerview/   # 可选的 Ledger → View 转换
-    ├── adapters/agentgo/         # AgentGo 记录与原生恢复适配
+    ├── common/                  # 共享模型身份、请求/响应、Usage 与 Error
+    ├── observation/             # SessionView，无 Store 依赖
+    ├── ledger/observation/       # Ledger 内可选观察入口
+    ├── agentgo/                 # ledger / observation 按接入库组织
     └── stores/
         ├── bolt/                 # 单文件 KV Store
         └── gorm/                 # 可注入 MySQL/SQLite 等 driver 的关系型 Store
@@ -65,11 +64,15 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 10. `RunView` 是按上游 `(session_id, run_id)` 查询的执行读模型，不创建权威 Run 行；Run inspection
     只汇总终态事实、Checkpoint link 和未决 Attempt，不选择控制状态或恢复策略。
 
-11. `common` 共享调用事实；`view` 组织 Run/Turn/Input/调用/Operation 并渲染。View 不要求
-    Ledger ingestion、UUID 或 Action/Attempt 层级。`RunView` 仍是 Ledger 查询结果，`view.Run` 是
-    展示结构。Ledger 和 View 均只依赖 common；转换模块同时依赖两者，Core 不导入 View。
-    模型/工具 Recorder 使用 common 请求与响应，事件专属 details 不得覆盖公共字段。投影保留
-    Lane 顺序、每次物理调用、冲突终态和证据缺口，不作恢复决策。
+11. `common` 表达真正共享的身份与调用事实；Ledger 侧重 Session 的可恢复性，`observation`
+    侧重 Session 的可观测性，`SessionView` 是其当前主要能力。一个 SessionView 只表达一个 Agent
+    Session；跨 Session 业务流程留给后续 Timeline。followup/resume 不自动新建 Session。
+12. 同名但职责不同的类型可以留在各包，例如 Ledger 查询用的 SessionView 与 observation.SessionView；
+    同时使用时 alias，只有语义与契约一致的类型才进入 common。
+13. Pi、AgentGo 的适配各归一个库目录，分别提供 ledger 与 observation 入口。原生 Session 可直接
+    生成观察模型。通用 Ledger 转换归 Ledger 可选读侧入口；不再发布独立 projection 包。
+    Ledger 核心不导入 observation，observation 不导入 Store。缺失结果与 outcome_unknown 保持区别，
+    展示不作恢复决策、不重建模型未实际收到的请求、不将其他 Session 的执行体合并进当前 Session。
 
 ## 开发约定
 
@@ -89,12 +92,12 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 - `README.md` — 使用者视角的项目定位、模型和最短开发入口
 - `spec/rfcs/0001-agent-ledger.md` — Ledger 核心契约、因果模型与读侧投影
 - `spec/rfcs/0002-polyglot-adapters.md` — 多语言 Adapter、能力声明与恢复边界
-- `docs/execution-view.md` — 共享调用契约、Ledger/View 边界与使用方式
+- `docs/observation.md` — 共享调用契约、Ledger/Observation 边界与使用方式
 - `docs/checkpoint.md` — Checkpoint 对象、保存契约、Ledger 锚点与组合恢复
 - `spec/schemas/event.schema.json` — Event envelope
 - `spec/schemas/artifact.schema.json` — Artifact identity and immutable version metadata
-- `spec/schemas/common.schema.json` — Ledger/View 共享调用事实
-- `spec/schemas/view.schema.json` — 执行读模型与跨语言展示契约
+- `spec/schemas/common.schema.json` — Ledger/Observation 共享调用事实
+- `spec/schemas/session-view.schema.json` — 执行读模型与跨语言展示契约
 - `spec/schemas/call-payload.schema.json` — Core model/tool Attempt payload profiles
 - `spec/schemas/checkpoint.schema.json` — Checkpoint envelope
 - `spec/schemas/mysql.sql` — 无外键的参考关系型 Schema
