@@ -1,4 +1,5 @@
 from agent_ledger import Actor, LaneRecorder, project_atif
+from agent_ledger.common import CallRequest, CallResponse
 from agent_ledger.stores.memory import MemoryEventStore
 
 
@@ -14,18 +15,22 @@ async def test_atif_projection_uses_action_type_and_attempt_events() -> None:
     turn = await recorder.start_turn()
     model = await recorder.before_model_call(
         turn,
-        payload={"model": {"id": "test-model"}, "input": [{"role": "user"}]},
+        payload=CallRequest.model_validate(
+            {"model": {"id": "test-model"}, "input": [{"role": "user"}]}
+        ),
     )
     await recorder.model_completed(
         model,
-        payload={"output": {"role": "assistant", "content": "checking"}},
+        payload=CallResponse.model_validate(
+            {"output": {"role": "assistant", "content": "checking"}}
+        ),
     )
     tool = await recorder.before_tool_call(
         turn,
         action_key="call-1",
-        payload={"tool_name": "lookup", "input": {"q": "x"}},
+        payload=CallRequest.model_validate({"tool_name": "lookup", "input": {"q": "x"}}),
     )
-    await recorder.tool_completed(tool, payload={"output": "done"})
+    await recorder.tool_completed(tool, payload=CallResponse.model_validate({"output": "done"}))
 
     trajectories = project_atif(await store.load_session("session"))
 

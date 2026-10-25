@@ -45,7 +45,7 @@ class Node(Fact):
 class Input(Node):
     kind: Literal["input"] = "input"
     mode: str = "initial"
-    content: Any
+    content: Any = Field(json_schema_extra={"preserve_null": True})
 
 
 class ModelCall(Node):
@@ -66,7 +66,7 @@ class ToolCall(Node):
 class Operation(Node):
     kind: Literal["operation"] = "operation"
     operation: str = Field(min_length=1)
-    data: Any = None
+    data: Any = Field(default=None, json_schema_extra={"preserve_null": True})
     items: list[Item] = Field(default_factory=list)
 
 

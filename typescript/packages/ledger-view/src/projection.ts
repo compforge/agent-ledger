@@ -1,14 +1,8 @@
-import type { CallRequest, CallResponse, JsonValue } from "@agent-ledger/common";
+import { decodeRequest, decodeResponse, callDetails, type JsonValue } from "@agent-ledger/common";
 import { validate, type Document, type Node, type Run, type Turn, type ModelCall, type ToolCall, type Operation, type Status } from "@agent-ledger/view";
-import type { RunView, StoredEvent } from "./types.js";
+import type { RunView, StoredEvent } from "@agent-ledger/core";
 
 const terminal: Record<string, Status> = { completed: "completed", failed: "failed", cancelled: "cancelled", outcome_unknown: "outcome_unknown" };
-const requestKeys = ["input", "input_artifact_id", "model", "tool_name", "client_request_id"];
-const responseKeys = ["output", "output_artifact_id", "model", "usage", "error", "finish_reason", "provider_request_id", "external_operation_id"];
-function pick(payload: Record<string, JsonValue>, keys: string[]): Record<string, JsonValue> {
-  return Object.fromEntries(Object.entries(payload).filter(([key]) => keys.includes(key)));
-}
-
 /** Read-only projection. Every physical attempt stays visible; no recovery decisions are made. */
 export function projectView(source: RunView): Document {
   const run: Run = {kind: "run", id: `run:${source.session_id}/${source.run_id}`, session_id: source.session_id, attributes: {run_id: source.run_id}, lanes: [], items: []};
@@ -71,15 +65,15 @@ export function projectView(source: RunView): Document {
         }
         observe(call,event);
         if (call.kind !== "operation") {
-          if (event.event_type === "attempt.requested") call.request = pick(event.payload, requestKeys) as CallRequest;
+          if (event.event_type === "attempt.requested") call.request = decodeRequest(event.payload);
           else if (terminal[event.event_type.split(".").at(-1)!] !== undefined) {
-            if (terminals.get(call.id)!.length === 1) call.response = pick(event.payload, responseKeys) as CallResponse;
+            if (terminals.get(call.id)!.length === 1) call.response = decodeResponse(event.payload);
             else delete call.response;
           } else {
             const records = ((call.attributes ??= {}).events ??= []) as JsonValue[];
             records.push(JSON.parse(JSON.stringify(event)) as JsonValue);
           }
-          const extra = Object.fromEntries(Object.entries(event.payload).filter(([k]) => !requestKeys.includes(k) && !responseKeys.includes(k)));
+          const extra = callDetails(event.payload);
           if (Object.keys(extra).length) {
             const details = ((call.attributes ??= {}).event_details ??= {}) as Record<string, JsonValue>;
             details[event.id] = extra;

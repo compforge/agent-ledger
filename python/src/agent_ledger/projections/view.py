@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_ledger.common import CallRequest, CallResponse
+from agent_ledger.common import CallRequest, CallResponse, call_details
 from agent_ledger.models import RunView, StoredEvent
 from agent_ledger.view.models import (
     Document,
@@ -111,34 +111,18 @@ def project_view(source: RunView) -> Document:
                 observe(call, event)
                 if isinstance(call, (ModelCall, ToolCall)):
                     if event.event_type == "attempt.requested":
-                        call.request = CallRequest.model_validate(
-                            {
-                                k: v
-                                for k, v in event.payload.items()
-                                if k in CallRequest.model_fields
-                            }
-                        )
+                        call.request = CallRequest.from_payload(event.payload)
                     elif event.event_type.rsplit(".", 1)[-1] in _TERMINALS:
                         # Preserve conflicting observations without choosing a result.
                         if len(terminals[call.id]) == 1:
-                            call.response = CallResponse.model_validate(
-                                {
-                                    k: v
-                                    for k, v in event.payload.items()
-                                    if k in CallResponse.model_fields
-                                }
-                            )
+                            call.response = CallResponse.from_payload(event.payload)
                         else:
                             call.response = None
                     else:
                         call.attributes.setdefault("events", []).append(
                             event.model_dump(mode="json")
                         )
-                    extra = {
-                        k: v
-                        for k, v in event.payload.items()
-                        if k not in CallRequest.model_fields and k not in CallResponse.model_fields
-                    }
+                    extra = call_details(event.payload)
                     if extra:
                         call.attributes.setdefault("event_details", {})[event.id] = extra
                 else:

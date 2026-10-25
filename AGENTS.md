@@ -25,13 +25,15 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 ├── python/                       # Python Core；Memory、Redis、SQLAlchemy Stores
 ├── typescript/
 │   └── packages/
-│       ├── common/            # 共享调用事实；无存储或渲染依赖
+│       ├── common/               # 共享调用事实；无存储或渲染依赖
 │       ├── view/                 # 执行读模型、校验与 HTML 渲染
-│       ├── core/                 # TypeScript Core、Memory Store 与 Ledger → View 投影
+│       ├── core/                 # TypeScript Core 与 Memory Store
+│       ├── ledger-view/          # 可选的 Ledger → View 转换，同时依赖两者
 │       └── pi/                   # Pi hooks 与原生 SessionStorage Lane
 └── go/                           # Go Core 与公共 LaneRecorder
     ├── common/               # 共享模型身份、请求/响应、Usage 与 Error
     ├── view/                    # 无 Store 依赖的执行读模型
+    ├── projections/ledgerview/   # 可选的 Ledger → View 转换
     ├── adapters/agentgo/         # AgentGo 记录与原生恢复适配
     └── stores/
         ├── bolt/                 # 单文件 KV Store
@@ -65,7 +67,9 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 
 11. `common` 共享调用事实；`view` 组织 Run/Turn/Input/调用/Operation 并渲染。View 不要求
     Ledger ingestion、UUID 或 Action/Attempt 层级。`RunView` 仍是 Ledger 查询结果，`view.Run` 是
-    展示结构。投影保留 Lane 顺序、每次物理调用、冲突终态和证据缺口，不作恢复决策。
+    展示结构。Ledger 和 View 均只依赖 common；转换模块同时依赖两者，Core 不导入 View。
+    模型/工具 Recorder 使用 common 请求与响应，事件专属 details 不得覆盖公共字段。投影保留
+    Lane 顺序、每次物理调用、冲突终态和证据缺口，不作恢复决策。
 
 ## 开发约定
 

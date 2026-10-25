@@ -22,9 +22,6 @@
   "references": [
     {
       "path": "../common"
-    },
-    {
-      "path": "../view"
     }
   ]
 }

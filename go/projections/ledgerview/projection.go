@@ -1,31 +1,31 @@
-package agentledger
+package ledgerview
 
 import (
 	"encoding/json"
+
 	"fmt"
 	"sort"
 	"strings"
 
+	agentledger "github.com/compforge/agent-ledger/go"
 	"github.com/compforge/agent-ledger/go/common"
 	"github.com/compforge/agent-ledger/go/view"
 )
 
 var viewTerminals = map[string]string{"completed": "completed", "failed": "failed", "cancelled": "cancelled", "outcome_unknown": "outcome_unknown"}
-var requestFields = []string{"input", "input_artifact_id", "model", "tool_name", "client_request_id"}
-var responseFields = []string{"output", "output_artifact_id", "model", "usage", "error", "finish_reason", "provider_request_id", "external_operation_id"}
 
-// ProjectView observes one upstream Run without selecting retry, cancellation or recovery policy.
+// Project observes one upstream Run without selecting retry, cancellation or recovery policy.
 // +spec=`Each physical call survives projection; missing results and recorded unknown outcomes differ`
 // +link=docs/execution-view.md
-func ProjectView(source RunView) (view.Document, error) {
+func Project(source agentledger.RunView) (view.Document, error) {
 	run := &view.Run{Node: view.Node{ID: "run:" + source.SessionID + "/" + source.RunID, Attributes: map[string]any{"run_id": source.RunID}}, SessionID: source.SessionID, Items: view.Items{}}
 	document := view.Document{SchemaVersion: view.SchemaVersion, Runs: []*view.Run{run}}
-	actions := map[string]Action{}
-	attempts := map[string]Attempt{}
-	rows := map[string]Turn{}
+	actions := map[string]agentledger.Action{}
+	attempts := map[string]agentledger.Attempt{}
+	rows := map[string]agentledger.Turn{}
 	turns := map[string]*view.Turn{}
 	calls := map[string]view.Item{}
-	terminals := map[string][]StoredEvent{}
+	terminals := map[string][]agentledger.StoredEvent{}
 	callOrder := []string{}
 	for _, x := range source.Actions {
 		actions[x.ID] = x
@@ -36,7 +36,7 @@ func ProjectView(source RunView) (view.Document, error) {
 	for _, x := range source.Turns {
 		rows[x.ID] = x
 	}
-	observe := func(node *view.Node, event StoredEvent) {
+	observe := func(node *view.Node, event agentledger.StoredEvent) {
 		node.Evidence = append(node.Evidence, view.SourceRef{Source: "ledger", ID: event.ID})
 		if node.Attributes == nil {
 			node.Attributes = map[string]any{}
@@ -89,7 +89,7 @@ func ProjectView(source RunView) (view.Document, error) {
 	}
 	for _, lane := range source.Lanes {
 		run.Lanes = append(run.Lanes, view.Lane{ID: lane.ID, Name: lane.Name, ParentID: lane.ParentLaneID})
-		events := []StoredEvent{}
+		events := []agentledger.StoredEvent{}
 		for _, event := range source.Events {
 			if event.LaneID == lane.ID {
 				events = append(events, event)
@@ -144,31 +144,26 @@ func ProjectView(source RunView) (view.Document, error) {
 				if request != nil {
 					suffix := event.EventType[strings.LastIndex(event.EventType, ".")+1:]
 					if event.EventType == "attempt.requested" {
-						value := &common.CallRequest{}
-						if err := decodeViewFields(event.Payload, requestFields, value); err != nil {
+						value, err := common.DecodeRequest(event.Payload)
+						if err != nil {
 							return document, fmt.Errorf("event %s request: %w", event.ID, err)
 						}
-						*request = value
+						*request = &value
 					} else if _, ok := viewTerminals[suffix]; ok {
 						if len(terminals[call.Base().ID]) == 1 {
-							value := &common.CallResponse{}
-							if err := decodeViewFields(event.Payload, responseFields, value); err != nil {
+							value, err := common.DecodeResponse(event.Payload)
+							if err != nil {
 								return document, fmt.Errorf("event %s response: %w", event.ID, err)
 							}
-							*response = value
+							*response = &value
 						} else {
 							*response = nil
 						}
 					} else {
-						records, _ := call.Base().Attributes["events"].([]StoredEvent)
+						records, _ := call.Base().Attributes["events"].([]agentledger.StoredEvent)
 						call.Base().Attributes["events"] = append(records, event)
 					}
-					extra := map[string]any{}
-					for key, value := range event.Payload {
-						if !hasField(requestFields, key) && !hasField(responseFields, key) {
-							extra[key] = value
-						}
-					}
+					extra := common.CallDetails(event.Payload)
 					if len(extra) > 0 {
 						details, _ := call.Base().Attributes["event_details"].(map[string]any)
 						if details == nil {
@@ -217,26 +212,4 @@ func ProjectView(source RunView) (view.Document, error) {
 	var detached view.Document
 	err = json.Unmarshal(encoded, &detached)
 	return detached, err
-}
-
-func decodeViewFields(payload map[string]any, fields []string, target any) error {
-	picked := map[string]any{}
-	for _, key := range fields {
-		if value, ok := payload[key]; ok {
-			picked[key] = value
-		}
-	}
-	encoded, err := json.Marshal(picked)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(encoded, target)
-}
-func hasField(fields []string, key string) bool {
-	for _, field := range fields {
-		if field == key {
-			return true
-		}
-	}
-	return false
 }

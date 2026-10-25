@@ -5,5 +5,3 @@ export * from "./recorder.js";
 export * from "./store.js";
 export * from "./types.js";
 export * from "./vocabulary.js";
-
-export { projectView } from "./projection.js";

@@ -15,6 +15,10 @@ from pydantic import (
 class Fact(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> Self:
+        return cls.model_validate({k: v for k, v in payload.items() if k in cls.model_fields})
+
     @model_serializer(mode="wrap")
     def serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         values = handler(self)
@@ -23,7 +27,10 @@ class Fact(BaseModel):
             key: value
             for key, value in values.items()
             if value is not None
-            or (key in {"input", "output", "content", "data"} and key in self.model_fields_set)
+            or (
+                type(self).model_fields[key].json_schema_extra == {"preserve_null": True}
+                and key in self.model_fields_set
+            )
         }
 
 
@@ -49,7 +56,7 @@ class CallError(Fact):
 
 class CallRequest(Fact):
     # Native payloads remain structured and ordered; no transcript reconstruction.
-    input: Any = None
+    input: Any = Field(default=None, json_schema_extra={"preserve_null": True})
     input_artifact_id: str | None = None
     model: Model | None = None
     tool_name: str | None = None
@@ -63,7 +70,7 @@ class CallRequest(Fact):
 
 
 class CallResponse(Fact):
-    output: Any = None
+    output: Any = Field(default=None, json_schema_extra={"preserve_null": True})
     output_artifact_id: str | None = None
     model: Model | None = None
     usage: Usage | None = None
@@ -77,3 +84,12 @@ class CallResponse(Fact):
         if "output" in self.model_fields_set and self.output_artifact_id is not None:
             raise ValueError("response cannot contain both output and output_artifact_id")
         return self
+
+
+def call_details(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return source details outside the shared call contract."""
+    return {
+        k: v
+        for k, v in payload.items()
+        if k not in CallRequest.model_fields and k not in CallResponse.model_fields
+    }

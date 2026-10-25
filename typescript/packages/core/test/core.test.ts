@@ -199,7 +199,7 @@ test("cancelled and unknown outcomes close physical attempts", async () => {
   );
   const replacement = await recorder.retry(unknown.action_id, 2, {
     tool_name: "write", input: {},
-    recovery_decision_id: "decision-1",
+  }, { recovery_decision_id: "decision-1",
   });
   await recorder.markAttemptOutcomeUnknown(unknown, "worker_lost", replacement.attempt_id);
 
@@ -307,4 +307,13 @@ test("committed event content is immutable", async () => {
   const reloaded = [];
   for await (const item of store.loadLane(lane.id)) reloaded.push(item);
   assert.deepEqual(reloaded[0]!.payload.nested, { value: 1 });
+});
+
+
+test("source details cannot override call facts before a request is recorded", async () => {
+ const store = new MemoryEventStore();
+ const recorder = await LaneRecorder.open({store, sessionId: "s", runId: "r", actor: newActor("agent", "test")});
+ const turn = await recorder.startTurn();
+ assert.throws(() => recorder.beforeModelCall(turn.id, {input: null}, {input: "hidden"}), /overlap/);
+ assert.equal((await store.loadRun("s", "r")).attempts.length, 0);
 });

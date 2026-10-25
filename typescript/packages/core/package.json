@@ -11,7 +11,6 @@
     }
   },
   "dependencies": {
-    "@agent-ledger/common": "0.1.0",
-    "@agent-ledger/view": "0.1.0"
+    "@agent-ledger/common": "0.1.0"
   }
 }

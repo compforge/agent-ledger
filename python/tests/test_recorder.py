@@ -13,6 +13,7 @@ from agent_ledger import (
     inspect_session,
     new_id,
 )
+from agent_ledger.common import CallRequest, CallResponse
 from agent_ledger.frameworks.plain_loop import PlainLoopContext, PlainLoopProfile
 from agent_ledger.stores.memory import MemoryEventStore
 
@@ -22,9 +23,11 @@ async def test_model_hook_is_durable_before_call() -> None:
     recorder = await _recorder(store)
     turn = await recorder.start_turn()
 
-    attempt = await recorder.before_model_call(turn, payload={"input": [], "model": {"id": "test"}})
+    attempt = await recorder.before_model_call(
+        turn, payload=CallRequest.model_validate({"input": [], "model": {"id": "test"}})
+    )
     events_before_call = [event async for event in store.read_lane(recorder.lane.id)]
-    await recorder.model_completed(attempt, payload={"output": "done"})
+    await recorder.model_completed(attempt, payload=CallResponse.model_validate({"output": "done"}))
 
     assert [event.event_type for event in events_before_call] == [
         EventType.TURN_STARTED,
@@ -45,7 +48,7 @@ async def test_failed_prewrite_prevents_external_call() -> None:
         await recorder.before_tool_call(
             created,
             action_key="charge-1",
-            payload={"tool_name": "charge", "input": {}},
+            payload=CallRequest.model_validate({"tool_name": "charge", "input": {}}),
         )
         called = True
     assert not called
@@ -55,11 +58,15 @@ async def test_retry_keeps_action_and_increments_attempt_number() -> None:
     store = MemoryEventStore()
     recorder = await _recorder(store)
     turn = await recorder.start_turn()
-    first = await recorder.before_model_call(turn, payload={"input": [], "model": {"id": "test"}})
+    first = await recorder.before_model_call(
+        turn, payload=CallRequest.model_validate({"input": [], "model": {"id": "test"}})
+    )
     failed = await recorder.model_failed(
         first,
         RuntimeError("limited"),
-        payload={"usage": {"input_tokens": 8}, "provider_request_id": "request-1"},
+        payload=CallResponse.model_validate(
+            {"usage": {"input_tokens": 8}, "provider_request_id": "request-1"}
+        ),
     )
     assert failed.payload == {
         "error": {"type": "RuntimeError", "message": "limited"},
@@ -67,7 +74,9 @@ async def test_retry_keeps_action_and_increments_attempt_number() -> None:
         "provider_request_id": "request-1",
     }
     second = await recorder.retry(
-        first.action_id, 2, payload={"input": [], "model": {"id": "test"}}
+        first.action_id,
+        2,
+        payload=CallRequest.model_validate({"input": [], "model": {"id": "test"}}),
     )
 
     inspection = inspect_session(await store.load_session(recorder.session_id))
@@ -82,21 +91,20 @@ async def test_cancelled_and_unknown_outcomes_close_attempts() -> None:
     store = MemoryEventStore()
     recorder = await _recorder(store)
     turn = await recorder.start_turn()
-    cancelled = await recorder.before_model_call(turn, payload={"input": []})
+    cancelled = await recorder.before_model_call(
+        turn, payload=CallRequest.model_validate({"input": []})
+    )
     cancelled_event = await recorder.cancel_attempt(cancelled, reason="user_interrupt")
     unknown = await recorder.before_tool_call(
         turn,
         action_key="tool-1",
-        payload={"tool_name": "write", "input": {}},
+        payload=CallRequest.model_validate({"tool_name": "write", "input": {}}),
     )
     replacement = await recorder.retry(
         unknown.action_id,
         2,
-        payload={
-            "tool_name": "write",
-            "input": {},
-            "recovery_decision_id": "decision-1",
-        },
+        payload=CallRequest.model_validate({"tool_name": "write", "input": {}}),
+        details={"recovery_decision_id": "decision-1"},
     )
     unknown_event = await recorder.mark_attempt_outcome_unknown(
         unknown,
@@ -153,10 +161,12 @@ async def test_plain_loop_profile_restores_snapshot_and_tail() -> None:
         PlainLoopContext(messages=[{"role": "user", "content": "hello"}]),
     )
     turn = await recorder.start_turn()
-    attempt = await recorder.before_model_call(turn, payload={"input": [], "model": {"id": "test"}})
+    attempt = await recorder.before_model_call(
+        turn, payload=CallRequest.model_validate({"input": [], "model": {"id": "test"}})
+    )
     await recorder.model_completed(
         attempt,
-        payload={"output": {"role": "assistant", "content": "hi"}},
+        payload=CallResponse.model_validate({"output": {"role": "assistant", "content": "hi"}}),
     )
     await recorder.complete_turn(turn)
 
@@ -191,7 +201,7 @@ async def test_checkpoint_link_and_run_completion_are_one_inspectable_append() -
     unresolved = await recorder.before_tool_call(
         turn,
         action_key="charge-1",
-        payload={"tool_name": "charge", "input": {}},
+        payload=CallRequest.model_validate({"tool_name": "charge", "input": {}}),
     )
 
     checkpoint_linked = ProposedEvent(
@@ -247,3 +257,15 @@ async def _recorder(store: MemoryEventStore) -> LaneRecorder:
         run_id="run",
         actor=Actor(type="agent", framework="plain-loop"),
     )
+
+
+async def test_call_details_cannot_shadow_shared_facts():
+    store = MemoryEventStore()
+    recorder = await _recorder(store)
+    turn = await recorder.start_turn()
+    with pytest.raises(ValueError, match="overlaps shared call facts"):
+        await recorder.before_model_call(
+            turn, payload=CallRequest(input=None), details={"input": "hidden"}
+        )
+    source = await store.load_run(recorder.lane.session_id, recorder.lane.run_id)
+    assert not source.attempts

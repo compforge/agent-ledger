@@ -1,4 +1,4 @@
-import type { CallRequest, CallResponse, JsonValue } from "@agent-ledger/common";
+import { validateRequest, validateResponse, type CallRequest, type CallResponse, type JsonValue } from "@agent-ledger/common";
 export type Status = "unknown" | "running" | "completed" | "failed" | "cancelled" | "outcome_unknown";
 export interface SourceRef { source: string; id: string; uri?: string }
 export interface Node {
@@ -49,10 +49,8 @@ export function validate(document: Document): void {
     for (const ref of node.evidence ?? []) if (!ref.source || !ref.id) throw new Error(`node ${node.id}: invalid evidence reference`);
     if (node.kind === "model_call") modelIds.add(node.id);
     if (node.kind === "model_call" || node.kind === "tool_call") {
-      if (node.request && "input" in node.request && node.request.input_artifact_id !== undefined) throw new Error(`node ${node.id}: ambiguous request content`);
-      if (node.response && "output" in node.response && node.response.output_artifact_id !== undefined) throw new Error(`node ${node.id}: ambiguous response content`);
-      for (const value of Object.values(node.response?.usage ?? {})) if (!Number.isSafeInteger(value) || value < 0) throw new Error(`node ${node.id}: invalid usage`);
-      if (node.request?.model && !node.request.model.id || node.response?.model && !node.response.model.id) throw new Error(`node ${node.id}: empty model id`);
+      if (node.request) validateRequest(node.request);
+      if (node.response) validateResponse(node.response);
     }
     if (node.kind === "tool_call") {
       tools.push(node);

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/compforge/agent-ledger/go/common"
 )
 
 type RecorderOptions struct {
@@ -153,31 +155,46 @@ func (r *LaneRecorder) FailTurn(ctx context.Context, turnID string, failure erro
 	return r.Record(ctx, EventTypeTurnFailed, turnID, errorPayload(failure, nil), "")
 }
 
-func (r *LaneRecorder) BeforeModelCall(ctx context.Context, turnID string, payload map[string]any) (AttemptHandle, error) {
-	return r.BeforeModelCallWithKey(ctx, turnID, "", payload)
+func (r *LaneRecorder) BeforeModelCall(ctx context.Context, turnID string, facts common.CallRequest, details map[string]any) (AttemptHandle, error) {
+	return r.BeforeModelCallWithKey(ctx, turnID, "", facts, details)
 }
 
 // BeforeModelCallWithKey records a model attempt under a caller-owned logical
 // execution key. Adapters use the key to reconnect a framework execution after
 // process recovery; Ledger does not interpret its value.
-func (r *LaneRecorder) BeforeModelCallWithKey(ctx context.Context, turnID, actionKey string, payload map[string]any) (AttemptHandle, error) {
+func (r *LaneRecorder) BeforeModelCallWithKey(ctx context.Context, turnID, actionKey string, facts common.CallRequest, details map[string]any) (AttemptHandle, error) {
+	payload, err := callPayload(facts, details)
+	if err != nil {
+		return AttemptHandle{}, err
+	}
+
 	return r.beforeCall(ctx, ActionTypeModelCall, turnID, actionKey, payload, Action{}, Effect{
 		Kind: EffectKindNone, Idempotency: IdempotencyNotApplicable,
 	}, 1)
 }
 
-func (r *LaneRecorder) BeforeToolCall(ctx context.Context, turnID, actionKey string, payload map[string]any) (AttemptHandle, error) {
-	return r.BeforeToolCallWithEffect(ctx, turnID, actionKey, payload, UnknownEffect())
+func (r *LaneRecorder) BeforeToolCall(ctx context.Context, turnID, actionKey string, facts common.CallRequest, details map[string]any) (AttemptHandle, error) {
+	return r.BeforeToolCallWithEffect(ctx, turnID, actionKey, facts, UnknownEffect(), details)
 }
 
-func (r *LaneRecorder) BeforeToolCallWithEffect(ctx context.Context, turnID, actionKey string, payload map[string]any, effect Effect) (AttemptHandle, error) {
+func (r *LaneRecorder) BeforeToolCallWithEffect(ctx context.Context, turnID, actionKey string, facts common.CallRequest, effect Effect, details map[string]any) (AttemptHandle, error) {
+	payload, err := callPayload(facts, details)
+	if err != nil {
+		return AttemptHandle{}, err
+	}
+
 	if actionKey == "" {
 		return AttemptHandle{}, errors.New("tool_call requires an action key")
 	}
 	return r.beforeCall(ctx, ActionTypeToolCall, turnID, actionKey, payload, Action{}, effect, 1)
 }
 
-func (r *LaneRecorder) Retry(ctx context.Context, actionID string, attemptNo int, payload map[string]any) (AttemptHandle, error) {
+func (r *LaneRecorder) Retry(ctx context.Context, actionID string, attemptNo int, facts common.CallRequest, details map[string]any) (AttemptHandle, error) {
+	payload, err := callPayload(facts, details)
+	if err != nil {
+		return AttemptHandle{}, err
+	}
+
 	action, exists, err := r.store.GetAction(ctx, actionID)
 	if err != nil {
 		return AttemptHandle{}, err
@@ -191,28 +208,48 @@ func (r *LaneRecorder) Retry(ctx context.Context, actionID string, attemptNo int
 	return r.beforeCall(ctx, action.Type, action.TurnID, action.Key, payload, action, action.Effect, attemptNo)
 }
 
-func (r *LaneRecorder) ModelCompleted(ctx context.Context, attempt AttemptHandle, payload map[string]any) (StoredEvent, error) {
+func (r *LaneRecorder) ModelCompleted(ctx context.Context, attempt AttemptHandle, facts common.CallResponse, details map[string]any) (StoredEvent, error) {
+	payload, err := callPayload(facts, details)
+	if err != nil {
+		return StoredEvent{}, err
+	}
+
 	if attempt.ActionType != ActionTypeModelCall {
 		return StoredEvent{}, errors.New("attempt is not a model_call")
 	}
 	return r.attemptCompleted(ctx, attempt, payload)
 }
 
-func (r *LaneRecorder) ModelFailed(ctx context.Context, attempt AttemptHandle, failure error, payload map[string]any) (StoredEvent, error) {
+func (r *LaneRecorder) ModelFailed(ctx context.Context, attempt AttemptHandle, failure error, facts common.CallResponse, details map[string]any) (StoredEvent, error) {
+	payload, err := callPayload(facts, details)
+	if err != nil {
+		return StoredEvent{}, err
+	}
+
 	if attempt.ActionType != ActionTypeModelCall {
 		return StoredEvent{}, errors.New("attempt is not a model_call")
 	}
 	return r.attemptFailed(ctx, attempt, failure, payload)
 }
 
-func (r *LaneRecorder) ToolCompleted(ctx context.Context, attempt AttemptHandle, payload map[string]any) (StoredEvent, error) {
+func (r *LaneRecorder) ToolCompleted(ctx context.Context, attempt AttemptHandle, facts common.CallResponse, details map[string]any) (StoredEvent, error) {
+	payload, err := callPayload(facts, details)
+	if err != nil {
+		return StoredEvent{}, err
+	}
+
 	if attempt.ActionType != ActionTypeToolCall {
 		return StoredEvent{}, errors.New("attempt is not a tool_call")
 	}
 	return r.attemptCompleted(ctx, attempt, payload)
 }
 
-func (r *LaneRecorder) ToolFailed(ctx context.Context, attempt AttemptHandle, failure error, payload map[string]any) (StoredEvent, error) {
+func (r *LaneRecorder) ToolFailed(ctx context.Context, attempt AttemptHandle, failure error, facts common.CallResponse, details map[string]any) (StoredEvent, error) {
+	payload, err := callPayload(facts, details)
+	if err != nil {
+		return StoredEvent{}, err
+	}
+
 	if attempt.ActionType != ActionTypeToolCall {
 		return StoredEvent{}, errors.New("attempt is not a tool_call")
 	}
@@ -327,6 +364,9 @@ func errorPayload(err error, payload map[string]any) map[string]any {
 	for key, value := range payload {
 		result[key] = value
 	}
+	if _, recorded := result["error"]; recorded {
+		return result
+	}
 	if err == nil {
 		result["error"] = map[string]any{"type": "unknown", "message": "unknown error"}
 		return result
@@ -340,4 +380,21 @@ func payloadOrEmpty(payload map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	return payload
+}
+
+// callPayload combines typed facts and event details without allowing shadowing.
+func callPayload(facts interface {
+	Payload() (map[string]any, error)
+}, details map[string]any) (map[string]any, error) {
+	payload, err := facts.Payload()
+	if err != nil {
+		return nil, err
+	}
+	if len(common.CallDetails(details)) != len(details) {
+		return nil, errors.New("event details overlap shared call facts")
+	}
+	for key, value := range details {
+		payload[key] = value
+	}
+	return payload, nil
 }

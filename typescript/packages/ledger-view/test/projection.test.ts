@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { projectView } from "../src/projection.js";
-import type { RunView } from "../src/types.js";
+import type { RunView } from "@agent-ledger/core";
 import type { ModelCall, ToolCall, Turn } from "@agent-ledger/view";
 const fixture = () => JSON.parse(readFileSync(new URL("../../../../../conformance/vectors/view-ledger.json", import.meta.url), "utf8")) as {source: RunView; call_ids: string[]; statuses: string[]};
 
@@ -18,4 +18,22 @@ test("projection preserves retry attempts, parallel Lanes, failures and unresolv
   calls[0]!.request!.input = "changed";
   assert.deepEqual(data.source,before);
   assert.ok(document.runs[0]!.items.some(item=>item.kind === "operation" && item.operation === "lane.vendor.notice"));
+});
+
+
+test("typed failed calls retain structured evidence through Recorder and View", async () => {
+ const {LaneRecorder, MemoryEventStore, newActor} = await import("@agent-ledger/core");
+ const {decodeRequest, decodeResponse} = await import("@agent-ledger/common");
+ const vector = JSON.parse(readFileSync(new URL("../../../../../conformance/vectors/common-call.json", import.meta.url), "utf8"));
+ const store = new MemoryEventStore();
+ const recorder = await LaneRecorder.open({store, sessionId: "s", runId: "r", actor: newActor("agent", "test")});
+ const turn = await recorder.startTurn();
+ const attempt = await recorder.beforeModelCall(turn.id, decodeRequest(vector.request), vector.details);
+ await recorder.modelFailed(attempt, new Error("fallback"), decodeResponse(vector.response), vector.details);
+ const document = projectView(await store.loadRun("s", "r"));
+ const call = (document.runs[0]!.items.find(n => n.kind === "turn") as Turn).items.find(n => n.kind === "model_call") as ModelCall;
+ assert.equal(call.status, "failed");
+ assert.deepEqual(call.request, vector.request);
+ assert.deepEqual(call.response, vector.response);
+ assert.deepEqual(Object.values(call.attributes!.event_details as object), [vector.details, vector.details]);
 });
