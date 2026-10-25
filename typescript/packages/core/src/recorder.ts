@@ -1,3 +1,4 @@
+import type { CallError } from "@agent-ledger/common";
 import { EntityConflict, EntityNotFound } from "./memory-store.js";
 import type { EventStore } from "./store.js";
 import {
@@ -345,6 +346,6 @@ function errorPayload(
     error: {
       type: error instanceof Error ? error.name : typeof error,
       message: error instanceof Error ? error.message : String(error),
-    },
+    } satisfies CallError,
   };
 }

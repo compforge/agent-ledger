@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError as JSONSchemaValidationError
+from referencing import Registry, Resource
 
 from agent_ledger.models import (
     ActionType,
@@ -71,6 +72,11 @@ def test_core_attempt_payload_profiles() -> None:
         (root / "spec/schemas/call-payload.schema.json").read_text(encoding="utf-8")
     )
 
+    execution_schema = json.loads((root / "spec/schemas/common.schema.json").read_text())
+    registry = Registry().with_resource(
+        execution_schema["$id"], Resource.from_contents(execution_schema)
+    )
+
     examples = {
         "model_call_attempt_requested": {
             "model": {"id": "claude-sonnet", "provider": "anthropic"},
@@ -108,7 +114,7 @@ def test_core_attempt_payload_profiles() -> None:
             "$defs": schema["$defs"],
             "$ref": f"#/$defs/{profile}",
         }
-        Draft202012Validator(profile_schema).validate(payload)
+        Draft202012Validator(profile_schema, registry=registry).validate(payload)
 
     model_completed = {
         "$schema": schema["$schema"],
@@ -116,7 +122,9 @@ def test_core_attempt_payload_profiles() -> None:
         "$ref": "#/$defs/model_call_completed",
     }
     with pytest.raises(JSONSchemaValidationError):
-        Draft202012Validator(model_completed).validate({"message": "legacy alias"})
+        Draft202012Validator(model_completed, registry=registry).validate(
+            {"message": "legacy alias"}
+        )
 
     tool_requested = {
         "$schema": schema["$schema"],
@@ -124,7 +132,7 @@ def test_core_attempt_payload_profiles() -> None:
         "$ref": "#/$defs/tool_call_attempt_requested",
     }
     with pytest.raises(JSONSchemaValidationError):
-        Draft202012Validator(tool_requested).validate(
+        Draft202012Validator(tool_requested, registry=registry).validate(
             {
                 "tool_call_id": "tool-1",
                 "tool_name": "write_file",

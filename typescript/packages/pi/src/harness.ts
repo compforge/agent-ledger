@@ -1,3 +1,4 @@
+import type { Model, Usage } from "@agent-ledger/common";
 import {
   type AdapterDescriptor,
   type AttemptHandle,
@@ -124,7 +125,7 @@ function modelIdentity(model: unknown): { [key: string]: JsonValue } | undefined
     ...(typeof candidate.provider === "string" && candidate.provider.length > 0
       ? { provider: candidate.provider }
       : {}),
-  };
+  } satisfies Model;
 }
 
 function modelResult(message: unknown): { [key: string]: JsonValue } {
@@ -145,16 +146,16 @@ function modelResult(message: unknown): { [key: string]: JsonValue } {
 function normalizedUsage(value: unknown): { [key: string]: JsonValue } | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const source = value as Record<string, unknown>;
-  const fields: Array<[string, string]> = [
+  const fields: Array<[keyof Usage, string]> = [
     ["input_tokens", "input"], ["output_tokens", "output"],
     ["cache_read_input_tokens", "cacheRead"], ["cache_write_input_tokens", "cacheWrite"],
     ["total_tokens", "totalTokens"],
   ];
-  const usage: { [key: string]: JsonValue } = {};
+  const usage: Usage = {};
   for (const [target, sourceKey] of fields) {
     if (typeof source[sourceKey] === "number") usage[target] = source[sourceKey];
   }
-  return Object.keys(usage).length === 0 ? undefined : usage;
+  return Object.keys(usage).length === 0 ? undefined : { ...usage };
 }
 
 function textContent(content: unknown): string {
