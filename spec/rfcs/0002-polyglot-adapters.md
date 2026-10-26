@@ -86,13 +86,21 @@ Harness work outside model and tool calls uses a concrete Action `type`, such as
 
 ## Pi profile
 
-The strict Pi integration implements its native `SessionStorage` in a dedicated framework Lane.
-Pi remains responsible for rebuilding model context from its append-only entry tree. Direct
-AgentHarness hooks add normalized Turn, model Action, tool Action, Attempt, and Run Events to the
-main Lane.
+The Pi 1.4 integration binds directly to the Agent's stream function and awaited lifecycle events.
+It gates model stream invocation, tool preparation/execution and loop advancement on Ledger writes.
+A failed write stops the binding; a synthetic error event cannot complete the Run successfully.
+One binding records one Run. Model requests contain the normalized transcript; tool requests are
+the proposal observed before validation/hooks. Provider-internal retries are opaque to this boundary.
+
+Coding-agent's `SessionManager` owns native entry storage and context reconstruction. Native files
+can be reopened directly. Applications choosing Checkpoint storage may explicitly dump the native
+header, entries and active leaf at a quiescent boundary, then restore an in-memory manager through
+Pi's public API. Pending queues and external effects are not included; unresolved Ledger Attempts
+still require reconciliation. No native transcript is copied automatically into a framework Lane.
 
 Pi's entry types, active leaf, and branching rules are private recovery semantics. Other Harnesses
-and orchestrators are not required to expose them.
+and orchestrators are not required to expose them. The binding does not cover coding-agent's
+background summarization or arbitrary provider calls outside the Agent loop.
 
 A coding-agent extension that swallows model-hook errors must declare model prewrite as
 `best_effort`. It may emit telemetry, but it is not the strict profile.

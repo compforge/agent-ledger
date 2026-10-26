@@ -5,15 +5,16 @@ import { appendFileSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { InMemorySessionStorage, Session, runAgentLoop, type StreamFn, type AgentContext, type SessionTreeEntry } from "@earendil-works/pi-agent-core";
-import { createAssistantMessageEventStream, type AssistantMessage, type Model } from "@earendil-works/pi-ai/compat";
+import { Agent, runAgentLoop, type StreamFn, type AgentContext } from "@earendil-works/pi-agent-core";
+import { AgentSession, DefaultResourceLoader, ModelRuntime, SettingsManager, SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
+import { InMemoryCredentialStore, Type, normalizeContext, createAssistantMessageEventStream, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import type { ModelCall, ToolCall } from "@compforge/agent-observation";
 import { PiObservation, observationWriter, readObservation, readSessionView, sessionView } from "../src/observation/index.js";
 
 const model: Model<"openai-completions"> = { id: "test", name: "test", api: "openai-completions", provider: "test",
   baseUrl: "http://unused", reasoning: false, input: ["text"], contextWindow: 10000, maxTokens: 1000,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-const metadata = { id: "session", createdAt: "2026-01-01T00:00:00Z" };
+const metadata = { type: "session" as const, version: 3, cwd: "/test", id: "session", timestamp: "2026-01-01T00:00:00Z" };
 function message(tool = false): AssistantMessage {
   return { role: "assistant", api: model.api, model: model.id, provider: model.provider, timestamp: Date.now(),
     content: tool ? [{ type: "toolCall", id: "lookup", name: "lookup", arguments: { key: "x" } }] : [{ type: "text", text: "done" }],
@@ -22,7 +23,7 @@ function message(tool = false): AssistantMessage {
 }
 function provider(tool = false): StreamFn {
   return async (selected, context, options) => {
-    await options?.onPayload?.({ messages: context.messages, tools: context.tools, system: context.systemPrompt }, selected);
+    await options?.onPayload?.({ messages: context.messages }, selected);
     const stream = createAssistantMessageEventStream(), response = message(tool);
     stream.push({ type: "done", reason: response.stopReason as "stop" | "toolUse", message: response });
     return stream;
@@ -39,20 +40,22 @@ function fixture(t: { after: (fn: () => void) => void }) {
 test("real Pi loop links native entries to stable calls; restart, branches and context transforms stay observable", async t => {
   const f = fixture(t);
   let capture = f.create();
-  let native = new InMemorySessionStorage({ metadata });
-  let session = new Session(capture.storage(native));
+  let native = SessionManager.inMemory(metadata.cwd, undefined, [metadata]);
+  let session = capture.storage(native);
   let calls = 0;
   const transport: StreamFn = (...args) => provider(++calls === 1)(...args);
   const tool = { name: "lookup", label: "lookup", description: "read", parameters: { type: "object", properties: {} },
     execute: async () => ({ content: [{ type: "text", text: "found" }], details: {} }) };
-  const context: AgentContext = { systemPrompt: "fixed", messages: [], tools: [tool as NonNullable<AgentContext["tools"]>[number]] };
+  const context: AgentContext = { messages: [{ role: "system", timestamp: 0, content: [{ type: "text", text: "fixed" }] }], tools: [tool as NonNullable<AgentContext["tools"]>[number]] };
   const run = async (text: string) => runAgentLoop([{ role: "user", content: text, timestamp: Date.now() }], context,
     { model, convertToLlm: messages => messages as Parameters<StreamFn>[1]["messages"],
       transformContext: async messages => messages.filter(m => m.role !== "user" || m.content !== "hidden"),
       onPayload: payload => ({ ...(payload as object), transformed: true }) },
     async event => {
       capture.event(event);
-      if (event.type === "message_end") await session.appendMessage(event.message);
+      if (event.type === "message_end" && ["system", "user", "assistant", "toolResult"].includes(event.message.role)) {
+        session.appendMessage(event.message as Parameters<SessionManager["appendMessage"]>[0]);
+      }
     }, undefined, capture.stream(transport));
   context.messages.push({ role: "user", content: "hidden", timestamp: 0 });
   await run("first");
@@ -82,9 +85,9 @@ test("real Pi loop links native entries to stable calls; restart, branches and c
   assert.equal(readObservation(f.path, metadata.id).nodes.some(n => n.kind === "input"), false);
 
   // Fresh observer and native storage, as after a process restart. The observer does not replay state.
-  native = new InMemorySessionStorage({ metadata, entries: JSON.parse(JSON.stringify(await native.getEntries())) });
-  capture = f.create(); session = new Session(capture.storage(native));
-  context.messages = (await session.buildContext()).messages;
+  native = SessionManager.inMemory(metadata.cwd, undefined, JSON.parse(JSON.stringify([metadata, ...native.getEntries()])));
+  capture = f.create(); session = capture.storage(native);
+  context.messages = (await session.buildSessionContext()).messages;
   await run("followup");
   view = await readSessionView(native, readObservation(f.path, metadata.id));
   assert.deepEqual(view.nodes.slice(0, firstIds.length).map(n => n.id), firstIds);
@@ -92,9 +95,9 @@ test("real Pi loop links native entries to stable calls; restart, branches and c
   capture.input(followup, "followup");
   assert.equal((await readSessionView(native, readObservation(f.path, metadata.id))).nodes.find(n => n.id === followup.id)?.kind, "input");
 
-  await native.setLeafId(user.id);
+  await native.branch(user.id);
   await session.appendCompaction("short", user.id, 500);
-  context.messages = (await session.buildContext()).messages;
+  context.messages = (await session.buildSessionContext()).messages;
   calls = 0; // same provider tool ID on a sibling branch
   await run("branch");
   view = await readSessionView(native, readObservation(f.path, metadata.id));
@@ -111,11 +114,11 @@ test("pending call survives an interrupted reader; resume does not reuse its ide
   await capture.stream(async (m, _c, options) => {
     await options?.onPayload?.({ messages: [] }, m);
     return never;
-  })(model, { messages: [] });
+  })(model, normalizeContext({ messages: [] }));
   const pending = readObservation(f.path, metadata.id);
   assert.equal(pending.nodes[0]!.status, "unknown");
   assert.ok(pending.issues.some(x => x.includes("completion not observed")));
-  const next = await f.create().stream(provider())(model, { messages: [] });
+  const next = await f.create().stream(provider())(model, normalizeContext({ messages: [] }));
   await next.result();
   const moduleUrl = new URL("../src/observation/index.js", import.meta.url).href;
   const restored = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e",
@@ -136,7 +139,7 @@ test("capture preserves transformed null, all payload callbacks and no payload r
     assert.equal(await options?.onPayload?.({ original: 2 }, m), null);
     const output = createAssistantMessageEventStream();
     output.push({ type: "done", reason: "stop", message: message() }); return output;
-  })(model, { messages: [] }, { onPayload: () => null });
+  })(model, normalizeContext({ messages: [] }), { onPayload: () => null });
   for await (const _event of stream) { /* iterator-only consumer */ }
   await stream.result();
   const view = sessionView(metadata, [], readObservation(f.path, metadata.id));
@@ -145,31 +148,31 @@ test("capture preserves transformed null, all payload callbacks and no payload r
   assert.equal(view.nodes.filter(n => n.kind === "operation").length, 1);
   const noPayload = await capture.stream(async () => {
     const output = createAssistantMessageEventStream(); output.push({ type: "done", reason: "stop", message: message() }); return output;
-  })(model, { messages: [] });
+  })(model, normalizeContext({ messages: [] }));
   await noPayload.result();
   assert.ok(sessionView(metadata, [], readObservation(f.path, metadata.id)).issues!.some(x => x.includes("provider payload not observed")));
 });
 
 test("stream errors, cancellation and capture failures preserve the agent's behavior", async t => {
   const f = fixture(t), capture = f.create();
-  await assert.rejects(async () => capture.stream(async () => { throw new Error("transport down"); })(model, { messages: [] }), /transport down/);
+  await assert.rejects(async () => capture.stream(async () => { throw new Error("transport down"); })(model, normalizeContext({ messages: [] })), /transport down/);
   const cancelled = { ...message(), stopReason: "aborted" as const, errorMessage: "cancelled" };
   const stream = await capture.stream(async () => {
     const output = createAssistantMessageEventStream(); output.push({ type: "error", reason: "aborted", error: cancelled }); return output;
-  })(model, { messages: [] });
+  })(model, normalizeContext({ messages: [] }));
   assert.equal(await stream.result(), cancelled);
   const nodes = readObservation(f.path, metadata.id).nodes;
   assert.equal(nodes[0]!.status, "failed"); assert.equal(nodes[1]!.status, "cancelled");
   const errors: Error[] = [];
   const broken = new PiObservation({ sessionId: "session", write: () => { throw new Error("disk full"); }, onError: e => errors.push(e) });
-  const healthy = await broken.stream(provider())(model, { messages: [] });
+  const healthy = await broken.stream(provider())(model, normalizeContext({ messages: [] }));
   assert.equal((await healthy.result()).stopReason, "stop");
   assert.ok(errors.length >= 2);
 });
 
 test("identity mismatch, corrupted records and explicit links cannot silently mix Sessions", async t => {
   const f = fixture(t), capture = f.create();
-  await (await capture.stream(provider())(model, { messages: [] })).result();
+  await (await capture.stream(provider())(model, normalizeContext({ messages: [] }))).result();
   const snapshot = readObservation(f.path, metadata.id);
   assert.throws(() => sessionView({ ...metadata, id: "other" }, [], snapshot), /Session mismatch/);
   const wrong = readObservation(f.path, "other");
@@ -178,7 +181,7 @@ test("identity mismatch, corrupted records and explicit links cannot silently mi
   appendFileSync(f.path, 'null\n');
   assert.ok(readObservation(f.path, metadata.id).issues.some(x => x.includes("suffix not read")));
   const node = snapshot.nodes[0]!;
-  const entry: SessionTreeEntry = { type: "message", id: "native", parentId: null, timestamp: metadata.createdAt, message: message() };
+  const entry: SessionEntry = { type: "message", id: "native", parentId: null, timestamp: metadata.timestamp, message: message() };
   const linked = { ...snapshot, links: [{ nodeId: node.id, entryId: "native" }] };
   assert.equal(sessionView(metadata, [entry], linked).nodes.length, 1);
   assert.throws(() => sessionView(metadata, [entry], { ...snapshot,
@@ -192,9 +195,9 @@ test("unfinished tools and lost terminal records keep native outcomes without fa
   const partial = sessionView(metadata, [], readObservation(f.path, metadata.id));
   assert.equal(partial.nodes[0]!.status, "unknown");
   const response = message();
-  const native: SessionTreeEntry = { type: "message", id: "result", parentId: null, timestamp: metadata.createdAt, message: response };
+  const native: SessionEntry = { type: "message", id: "result", parentId: null, timestamp: metadata.timestamp, message: response };
   const restored = sessionView(metadata, [native], { sessionId: metadata.id, inputs: [], issues: ["node lost: completion not observed"],
-    nodes: [{ id: "lost", kind: "model_call", status: "unknown", started_at: metadata.createdAt }],
+    nodes: [{ id: "lost", kind: "model_call", status: "unknown", started_at: metadata.timestamp }],
     links: [{ nodeId: "lost", entryId: "result" }] });
   assert.equal(restored.nodes[0]!.status, "completed");
   assert.ok((restored.nodes[0] as ModelCall).response);
@@ -203,14 +206,14 @@ test("unfinished tools and lost terminal records keep native outcomes without fa
 
 test("partial tail is retained and new segments can be read together", async t => {
   const f = fixture(t);
-  await (await f.create().stream(provider())(model, { messages: [] })).result();
+  await (await f.create().stream(provider())(model, normalizeContext({ messages: [] }))).result();
   appendFileSync(f.path, '{"version":');
   const second = f.create();
-  await (await second.stream(provider())(model, { messages: [] })).result();
+  await (await second.stream(provider())(model, normalizeContext({ messages: [] }))).result();
   assert.ok(f.errors.some(e => e.message.includes("incomplete tail")));
   const nextPath = `${f.path}.next`;
   const resumed = new PiObservation({ sessionId: metadata.id, write: observationWriter(nextPath), onError: e => { throw e; } });
-  await (await resumed.stream(provider())(model, { messages: [] })).result();
+  await (await resumed.stream(provider())(model, normalizeContext({ messages: [] }))).result();
   const recovered = readObservation([f.path, nextPath], metadata.id);
   assert.equal(recovered.nodes.filter(n => n.kind === "model_call").length, 2);
   assert.ok(recovered.issues.some(x => x.includes("incomplete trailing")));
@@ -223,7 +226,7 @@ test("compressed supplemental requests remain exact and occupy less disk than re
   const text = "message context and tool definitions ".repeat(2000);
   const payload = { system: text, messages: Array.from({ length: 10 }, (_, n) => ({ role: "user", content: `${n}:${text}` })) };
   for (let n = 0; n < 10; n++) {
-    await (await capture.stream(provider())(model, { messages: [] }, { onPayload: () => payload })).result();
+    await (await capture.stream(provider())(model, normalizeContext({ messages: [] }), { onPayload: () => payload })).result();
   }
   const projected = sessionView(metadata, [], readObservation(f.path, metadata.id));
   for (const node of projected.nodes as ModelCall[]) assert.deepEqual(node.request!.input, payload);
@@ -238,7 +241,7 @@ test("disk budget persists an evidence gap and stays capped after restart", asyn
   const write = observationWriter(f.path, { maxBytes });
   const records = Array.from({ length: 300 }, (_, n) => createHash("sha256").update(String(n)).digest("hex")).join("");
   const capture = new PiObservation({ sessionId: metadata.id, write, onError: e => f.errors.push(e) });
-  const result = await capture.stream(provider())(model, { messages: [] }, { onPayload: () => ({ records }) });
+  const result = await capture.stream(provider())(model, normalizeContext({ messages: [] }), { onPayload: () => ({ records }) });
   assert.equal((await result.result()).stopReason, "stop");
   assert.ok(statSync(f.path).size <= maxBytes);
   assert.equal(f.errors.length, 1);
@@ -248,14 +251,14 @@ test("disk budget persists an evidence gap and stays capped after restart", asyn
   assert.equal((limited.nodes[0] as ModelCall).request, undefined);
   assert.ok(sessionView(metadata, [], limited).issues!.some(issue => issue.includes("provider payload not observed")));
   const resumed = new PiObservation({ sessionId: metadata.id, write: observationWriter(f.path, { maxBytes }), onError: e => f.errors.push(e) });
-  await (await resumed.stream(provider())(model, { messages: [] })).result();
+  await (await resumed.stream(provider())(model, normalizeContext({ messages: [] }))).result();
   assert.equal(statSync(f.path).size, before);
   assert.equal(f.errors.length, 2);
 });
 
 test("missing native entries keep supplemental metadata without fabricating message bodies", async t => {
   const f = fixture(t), capture = f.create();
-  const stream = await capture.stream(provider())(model, { messages: [] });
+  const stream = await capture.stream(provider())(model, normalizeContext({ messages: [] }));
   const response = await stream.result();
   capture.link(capture.modelCallId(response)!, "removed-entry");
   const view = sessionView(metadata, [], readObservation(f.path, metadata.id));
@@ -267,9 +270,9 @@ test("missing native entries keep supplemental metadata without fabricating mess
 
 test("tool argument transformations are supplementary evidence; unchanged proposals need no copy", async t => {
   const f = fixture(t), capture = f.create();
-  const native = new InMemorySessionStorage({ metadata });
-  const session = new Session(capture.storage(native));
-  const final = await (await capture.stream(provider(true))(model, { messages: [] })).result();
+  const native = SessionManager.inMemory(metadata.cwd, undefined, [metadata]);
+  const session = capture.storage(native);
+  const final = await (await capture.stream(provider(true))(model, normalizeContext({ messages: [] }))).result();
   await session.appendMessage(final);
   capture.event({ type: "tool_execution_start", toolCallId: "lookup", toolName: "lookup", args: { key: "x", limit: 10 } });
   capture.event({ type: "tool_execution_end", toolCallId: "lookup", toolName: "lookup", result: { content: [] }, isError: false });
@@ -278,4 +281,57 @@ test("tool argument transformations are supplementary evidence; unchanged propos
   const tool = view.nodes.find(n => n.kind === "tool_call") as ToolCall;
   assert.deepEqual(tool.request!.input, { key: "x", limit: 10 });
   assert.ok(tool.response);
+});
+
+
+test("coding-agent persists linked evidence in its native file and reopens it without a second transcript", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-coding-observation-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const native = SessionManager.create(dir, dir);
+  const path = join(dir, "supplement.jsonl");
+  const errors: Error[] = [];
+  const capture = new PiObservation({ sessionId: native.getSessionId(), write: observationWriter(path), onError: e => errors.push(e) });
+  const agent = new Agent({ streamFn: capture.stream(provider()), initialState: { model } });
+  const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
+  const resourceLoader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, settingsManager,
+    noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
+  await resourceLoader.reload();
+  const modelRuntime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null,
+    modelsStorePath: join(dir, "models.db"), refreshOnCreate: false, allowModelNetwork: false });
+  const session = new AgentSession({ agent, sessionManager: capture.storage(native), settingsManager,
+    resourceLoader, modelRuntime, cwd: dir, initialActiveToolNames: [] });
+  t.after(() => session.dispose());
+  agent.subscribe(event => capture.event(event));
+  await agent.prompt("hello");
+  const reopened = SessionManager.open(native.getSessionFile()!);
+  assert.equal(reopened.getSessionId(), native.getSessionId());
+  const snapshot = readObservation(path, native.getSessionId());
+  const view = await readSessionView(reopened, snapshot);
+  const calls = view.nodes.filter(n => n.kind === "model_call") as ModelCall[];
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0]!.request); assert.ok(calls[0]!.response?.output);
+  assert.equal(snapshot.nodes.some(n => (n as ModelCall).response?.output !== undefined), false);
+  assert.equal(view.nodes.filter(n => n.kind === "input").length, 1);
+  assert.deepEqual(errors, []);
+});
+
+test("real Pi beforeToolCall captures hook-edited arguments after the raw start event", async t => {
+  const f = fixture(t), capture = f.create();
+  const native = SessionManager.inMemory(metadata.cwd, undefined, [metadata]);
+  const storage = capture.storage(native);
+  let calls = 0;
+  const agent = new Agent({ streamFn: capture.stream((...args) => provider(++calls === 1)(...args)),
+    initialState: { model, tools: [{ name: "lookup", label: "lookup", description: "read",
+      parameters: Type.Object({ key: Type.String() }),
+      execute: async (_id, args) => { assert.deepEqual(args, { key: "edited" }); return { content: [], details: {} }; } }] },
+    beforeToolCall: capture.beforeToolCall(async context => { (context.args as { key: string }).key = "edited"; return undefined; }),
+  });
+  agent.subscribe(event => {
+    capture.event(event);
+    if (event.type === "message_end") storage.appendMessage(event.message as Parameters<SessionManager["appendMessage"]>[0]);
+  });
+  await agent.prompt("go");
+  const view = await readSessionView(native, readObservation(f.path, metadata.id));
+  const tool = view.nodes.find(n => n.kind === "tool_call") as ToolCall;
+  assert.deepEqual(tool.request?.input, { key: "edited" });
 });

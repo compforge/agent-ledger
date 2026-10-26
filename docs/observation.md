@@ -45,7 +45,7 @@ Session has another identity. Cross-Session task flow is organized by JobView.
 
 The Ledger owns no authoritative Session row. Adapters must supply a Session identity for the agent
 interaction they record; a business task ID alone does not establish that multiple loops share one
-Session. Pi retains its native Session ID even when Ledger-backed storage uses a different namespace.
+Session. Pi retains its native Session ID even when the Ledger Session uses a different namespace.
 Those two IDs must not be silently substituted in observation.
 
 ## SessionView contract
@@ -211,8 +211,8 @@ Each library package owns both integrations, exposed through independent entrypo
 | Pi (TypeScript) | `@compforge/agent-pi/ledger` | `@compforge/agent-pi/observation` |
 | AgentGo (Go) | `go/agentgo/ledger` | `go/agentgo/observation` |
 
-Pi observation consumes native `SessionMetadata` and `SessionTreeEntry` values, or a read-only
-`SessionStorage`. Tool-result association follows exact tool IDs on the entry's ancestor path,
+Pi observation consumes coding-agent `SessionHeader` and `SessionEntry` values, or reads a native
+`SessionManager`. Tool-result association follows exact tool IDs on the entry's ancestor path,
 so sibling branches cannot accidentally supply arguments. Session messages do not contain exact
 model requests or reliable start times: those fields remain absent and issues explain the gap.
 A result without its request remains an observed ToolCall. Pi's selected `model` stays source

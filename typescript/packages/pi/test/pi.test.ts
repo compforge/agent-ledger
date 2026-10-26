@@ -1,112 +1,100 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { type AppendReceipt, LaneRecorder, MemoryEventStore, newActor, type ProposedEvent } from "@compforge/agent-ledger";
+import { Agent, type StreamFn } from "@earendil-works/pi-agent-core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { createAssistantMessageEventStream, Type, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
+import { bindPiHarness, dumpPiSession, restorePiSession } from "../src/ledger/index.js";
 
-import {
-  type AppendReceipt,
-  type EventStore,
-  LaneRecorder,
-  MemoryEventStore,
-  newActor,
-  type ProposedEvent,
-} from "@compforge/agent-ledger";
+const model: Model<"openai-completions"> = { id: "test", name: "test", api: "openai-completions", provider: "test",
+  baseUrl: "http://unused", reasoning: false, input: ["text"], contextWindow: 10000, maxTokens: 1000,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+const response = (tool = false): AssistantMessage => ({ role: "assistant", api: model.api, model: model.id,
+  provider: model.provider, timestamp: 0, stopReason: tool ? "toolUse" : "stop",
+  content: tool ? [{ type: "toolCall", id: "call", name: "lookup", arguments: {} }] : [{ type: "text", text: "done" }],
+  usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
 
-import { bindPiHarness, LedgerPiSessionStorage } from "../src/ledger/index.js";
+function runtime() {
+  let modelCalls = 0, toolCalls = 0;
+  const stream: StreamFn = () => {
+    const output = createAssistantMessageEventStream();
+    const message = response(++modelCalls === 1);
+    output.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
+    return output;
+  };
+  const agent = new Agent({ streamFn: stream, initialState: { model, systemPrompt: "fixed", tools: [{
+    name: "lookup", label: "lookup", description: "read", parameters: Type.Object({}),
+    execute: async () => { toolCalls++; return { content: [{ type: "text", text: "found" }], details: {} }; },
+  }] } });
+  return { agent, counts: () => ({ modelCalls, toolCalls }), stream };
+}
 
-test("Pi native entries round-trip through a framework lane", async () => {
-  const store = new MemoryEventStore();
-  const actor = newActor("agent", "pi");
-  const storage = await LedgerPiSessionStorage.create({
-    store, sessionId: "ledger-session", runId: "runtime-1", actor,
-    metadata: { id: "pi-session", createdAt: "2026-01-02T03:04:05.000Z" },
-  });
-  await storage.appendEntry({
-    type: "message", id: "entry-1", parentId: null, timestamp: "2026-01-02T03:04:06.000Z",
-    message: { role: "user", content: "hello", timestamp: Date.now() },
-  });
-  const restored = await LedgerPiSessionStorage.open({
-    store, sessionId: "ledger-session", nativeSessionId: "pi-session", runId: "runtime-1", actor,
-  });
-  assert.equal(await restored.getLeafId(), "entry-1");
-  assert.deepEqual(await restored.getPathToRoot("entry-1"), await storage.getEntries());
-});
+async function recorder(store: MemoryEventStore, runId = "run") {
+  return LaneRecorder.open({ store, sessionId: "session", runId, actor: newActor("agent", "pi") });
+}
 
-test("Pi direct harness hooks record model action and attempt", async () => {
-  const store = new MemoryEventStore();
-  const recorder = await LaneRecorder.open({
-    store, sessionId: "session", runId: "run", actor: newActor("agent", "pi"),
-  });
-  const harness = new FakeHarness();
-  bindPiHarness(harness, recorder);
-  await harness.emit("turn_start", {});
-  await harness.hook("context", { messages: [{ role: "user", content: "hello" }] });
-  await harness.hook("before_provider_request", { model: { id: "model", provider: "test" } });
-  await harness.emit("message_end", { message: { role: "assistant", content: "done", stopReason: "stop" } });
-  await harness.emit("turn_end", {});
+test("real Pi Agent gates model/tool requests and outcomes; disposer restores stream", async () => {
+  const store = new MemoryEventStore(), r = runtime();
+  const dispose = bindPiHarness(r.agent, await recorder(store));
+  await r.agent.prompt("hello");
+  assert.deepEqual(r.counts(), { modelCalls: 2, toolCalls: 1 });
   const view = await store.loadSession("session");
-  assert.equal(view.actions[0]?.type, "model_call");
-  assert.equal(view.attempts.length, 1);
-  assert.deepEqual(view.events.map((event) => event.event_type), [
-    "turn.started", "attempt.requested", "attempt.completed", "turn.completed",
-  ]);
-  assert.deepEqual(view.events[1]?.payload, {
-    model: { id: "model", provider: "test" },
-    input: [{ role: "user", content: "hello" }],
-  });
-  assert.deepEqual(view.events[2]?.payload, {
-    output: { role: "assistant", content: "done", stopReason: "stop" },
-    finish_reason: "stop",
-  });
+  assert.deepEqual(view.actions.map(action => action.type), ["model_call", "tool_call", "model_call"]);
+  assert.equal(view.events.filter(event => event.event_type === "attempt.requested").length, 3);
+  assert.equal(view.events.filter(event => event.event_type === "attempt.completed").length, 3);
+  assert.equal(view.events.at(-1)?.event_type, "run.completed");
+  assert.equal(view.events.find(e => e.event_type === "attempt.completed")?.payload.model, undefined);
+  const request = view.events.find(event => event.event_type === "attempt.requested")!;
+  assert.ok(JSON.stringify(request.payload.input).includes('"role":"system"'));
+  dispose(); assert.equal(r.agent.streamFunction, r.stream);
+  const next = bindPiHarness(r.agent, await recorder(store, "next"));
+  await r.agent.prompt("again"); next();
+  assert.equal((await store.loadSession("session")).events.filter(e => e.event_type === "run.completed").length, 2);
 });
 
-test("Pi model hook fails closed before execution", async () => {
-  const store = new ModelPrewriteFailingStore();
-  const recorder = await LaneRecorder.open({
-    store, sessionId: "session", runId: "run", actor: newActor("agent", "pi"),
-  });
-  const harness = new FakeHarness();
-  bindPiHarness(harness, recorder);
-  await harness.emit("turn_start", {});
-  let modelStarted = false;
-  await assert.rejects(async () => {
-    await harness.hook("before_provider_request", { model: { id: "model", provider: "test" } });
-    modelStarted = true;
-  }, /prewrite failed/);
-  assert.equal(modelStarted, false);
-});
-
-class FakeHarness {
-  readonly #hooks = new Map<string, Array<(event: any) => any>>();
-  readonly #listeners: Array<(event: any) => Promise<void> | void> = [];
-
-  on(type: any, handler: (event: any) => any): () => void {
-    const handlers = this.#hooks.get(String(type)) ?? [];
-    handlers.push(handler);
-    this.#hooks.set(String(type), handlers);
-    return () => { handlers.splice(handlers.indexOf(handler), 1); };
-  }
-  subscribe(listener: (event: any) => Promise<void> | void): () => void {
-    this.#listeners.push(listener);
-    return () => { this.#listeners.splice(this.#listeners.indexOf(listener), 1); };
-  }
-  async hook(type: string, event: Record<string, unknown>): Promise<void> {
-    for (const handler of this.#hooks.get(type) ?? []) await handler({ type, ...event });
-  }
-  async emit(type: string, event: Record<string, unknown>): Promise<void> {
-    for (const listener of this.#listeners) await listener({ type, ...event });
+class FailingStore extends MemoryEventStore {
+  constructor(private readonly failAt: number) { super(); }
+  calls = 0;
+  override async append(laneId: string, seq: number, appendId: string, events: readonly ProposedEvent[]): Promise<AppendReceipt> {
+    if (events.some(e => e.event_type === "attempt.requested" || e.event_type === "attempt.completed") && ++this.calls === this.failAt) {
+      throw new Error("ledger write failed");
+    }
+    return super.append(laneId, seq, appendId, events);
   }
 }
 
-class ModelPrewriteFailingStore extends MemoryEventStore {
-  override async append(
-    laneId: string,
-    expectedLastSeq: number,
-    appendId: string,
-    events: readonly ProposedEvent[],
-  ): Promise<AppendReceipt> {
-    if (events.some((event) => event.event_type === "attempt.requested")) throw new Error("prewrite failed");
-    return super.append(laneId, expectedLastSeq, appendId, events);
-  }
+for (const [failAt, expected] of [[1, { modelCalls: 0, toolCalls: 0 }], [2, { modelCalls: 1, toolCalls: 0 }],
+  [3, { modelCalls: 1, toolCalls: 0 }], [4, { modelCalls: 1, toolCalls: 1 }]] as const) {
+  test(`Ledger write failure ${failAt} prevents the next effect in a real Pi Agent`, async () => {
+    const store = new FailingStore(failAt), r = runtime();
+    const dispose = bindPiHarness(r.agent, await recorder(store));
+    await assert.rejects(r.agent.prompt("hello"), /ledger write failed/);
+    assert.deepEqual(r.counts(), expected);
+    assert.equal((await store.loadSession("session")).events.some(e => e.event_type === "run.completed"), false);
+    dispose();
+  });
 }
 
-const _storeTypeCheck: EventStore = new MemoryEventStore();
-void _storeTypeCheck;
+test("Pi native checkpoint preserves identity, branches, compaction, context edits and active leaf", () => {
+  const native = SessionManager.inMemory("/test");
+  const user = native.appendMessage({ role: "user", content: "hello", timestamp: 0 });
+  native.appendMessage(response());
+  native.appendContextEdit(user, { content: "edited" });
+  native.appendCompaction("summary", user, 100);
+  const previous = native.getLeafId()!;
+  native.branch(user);
+  native.appendMessage({ role: "user", content: "branch", timestamp: 0 });
+  native.branch(previous); // active leaf is intentionally not the final appended entry
+  const snapshot = dumpPiSession(native);
+  const restored = restorePiSession(JSON.parse(JSON.stringify(snapshot)));
+  assert.equal(restored.getSessionId(), native.getSessionId());
+  assert.equal(restored.getLeafId(), previous);
+  assert.deepEqual(restored.getEntries(), JSON.parse(JSON.stringify(native.getEntries())));
+  assert.deepEqual(restored.buildSessionContext(), native.buildSessionContext());
+  snapshot.entries.length = 0;
+  assert.ok(restored.getEntries().length > 0);
+  native.resetLeaf();
+  assert.equal(restorePiSession(dumpPiSession(native)).getLeafId(), null);
+  assert.throws(() => restorePiSession({ ...dumpPiSession(native), leafId: "missing" }), /leaf missing not found/);
+});

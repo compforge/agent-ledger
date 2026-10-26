@@ -1,6 +1,6 @@
 import { mergeObservation } from "./merge.js";
 import type { PiObservationSnapshot } from "./journal.js";
-import type { SessionMetadata, SessionTreeEntry, SessionStorage } from "@earendil-works/pi-agent-core";
+import type { SessionHeader, SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { JsonValue } from "@compforge/agent-common";
 import { validate, type SessionView, type Node, type ModelCall, type ToolCall, type Input, type Operation } from "@compforge/agent-observation";
 
@@ -14,9 +14,9 @@ export { mergeObservation } from "./merge.js";
  * @spec Native result matching follows ancestry; runtime linkage requires explicit entry associations.
  * @see docs/observation.md
  */
-export function sessionView(metadata: SessionMetadata, entries: readonly SessionTreeEntry[], observation?: PiObservationSnapshot): SessionView {
+export function sessionView(metadata: SessionHeader, entries: readonly SessionEntry[], observation?: PiObservationSnapshot): SessionView {
   const result: SessionView = {schema_version: "agent-ledger/session@1", session: {source: "pi", id: metadata.id}, nodes: [], attributes: {metadata: json(metadata)}, issues: []};
-  const byId = new Map<string, SessionTreeEntry>();
+  const byId = new Map<string, SessionEntry>();
   const models = new Map<string, ModelCall>();
   for (const entry of entries) {
     if (byId.has(entry.id)) throw new Error(`Pi session ${metadata.id}: duplicate entry ${entry.id}`);
@@ -72,9 +72,11 @@ export function sessionView(metadata: SessionMetadata, entries: readonly Session
   return observation ? mergeObservation(result, observation) : structuredClone(result);
 }
 
-/** Read-only convenience for native or Ledger-backed Pi SessionStorage. */
-export async function readSessionView(storage: SessionStorage, observation?: PiObservationSnapshot): Promise<SessionView> {
-  return sessionView(await storage.getMetadata(), await storage.getEntries(), observation);
+/** Read-only projection of the native coding-agent SessionManager. */
+export async function readSessionView(storage: Pick<SessionManager, "getHeader" | "getEntries">, observation?: PiObservationSnapshot): Promise<SessionView> {
+  const header = storage.getHeader();
+  if (!header) throw new Error("Pi Session has no header");
+  return sessionView(header, storage.getEntries(), observation);
 }
 
 function json(value: unknown): JsonValue {
