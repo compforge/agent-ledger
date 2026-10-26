@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { sessionView } from "../src/observation/index.js";
 import type { ModelCall, ToolCall } from "@compforge/agent-observation";
 
-const metadata = {id: "native-session", createdAt: "2026-01-02T03:04:05.000Z"};
-const timestamp = metadata.createdAt;
-function assistant(id: string, parentId: string | null, argument: string): SessionTreeEntry {
+const metadata = {type: "session" as const, version: 3, cwd: "/test", id: "native-session", timestamp: "2026-01-02T03:04:05.000Z"};
+const timestamp = metadata.timestamp;
+function assistant(id: string, parentId: string | null, argument: string): SessionEntry {
   return {type: "message", id, parentId, timestamp, message: {
     role: "assistant", api: "openai-completions", provider: "openai", model: "requested",
     usage: {input: 0, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0}},
@@ -14,12 +14,12 @@ function assistant(id: string, parentId: string | null, argument: string): Sessi
     stopReason: "toolUse", timestamp: 0,
   }};
 }
-function tool(id: string, parentId: string): SessionTreeEntry {
+function tool(id: string, parentId: string): SessionEntry {
   return {type: "message", id, parentId, timestamp, message: {role: "toolResult", toolCallId: "same-tool-id", toolName: "lookup", content: [{type: "text", text: "answer"}], isError: false, timestamp: 0}};
 }
 
 test("Pi observation preserves append order, branch ownership and stable IDs across followup", () => {
-  const entries: SessionTreeEntry[] = [
+  const entries: SessionEntry[] = [
     {type: "message", id: "input", parentId: null, timestamp, message: {role: "user", content: "hello", timestamp: 0}},
     assistant("first", "input", "A"), assistant("branch", "input", "B"), tool("result", "first"),
   ];

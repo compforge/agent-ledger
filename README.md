@@ -132,7 +132,7 @@ lifecycle. `Initialize` creates the Ledger tables without foreign keys.
 
 | Adapter | Recording | Recovery |
 | --- | --- | --- |
-| Pi AgentHarness | Awaited Turn, model, and tool hooks | Ledger-backed Pi `SessionStorage` Lane |
+| Pi Agent (1.4.x) | Stream prewrite and awaited lifecycle events | Native `SessionManager` files or opt-in Checkpoint snapshots |
 | AgentGo | Run/Turn hooks plus model and tool middleware | `AgentSnapshot` Checkpoint plus native Loop replay |
 | Plain Python loop | Explicit `LaneRecorder` calls | Snapshot plus completed-outcome replay |
 

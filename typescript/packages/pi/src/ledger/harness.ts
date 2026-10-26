@@ -1,101 +1,88 @@
-import type { CallRequest, CallResponse, Model, Usage } from "@compforge/agent-common";
-import {
-  type AdapterDescriptor,
-  type AttemptHandle,
-  type JsonValue,
-  LaneRecorder,
-  type Turn,
-} from "@compforge/agent-ledger";
+import type { CallResponse } from "@compforge/agent-common";
+import { type AdapterDescriptor, type AttemptHandle, type JsonValue, LaneRecorder, type Turn } from "@compforge/agent-ledger";
+import type { Agent, AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 
 export const PI_ADAPTER: AdapterDescriptor = {
-  schema_version: "1.0",
-  adapter_id: "pi-agent-harness",
-  adapter_version: "1",
-  framework: "pi-agent-core",
-  framework_version: ">=0.80 <1",
+  schema_version: "1.0", adapter_id: "pi-agent", adapter_version: "2",
+  framework: "pi-agent-core", framework_version: ">=1.4 <2",
   capabilities: {
     model_prewrite: "strict", tool_prewrite: "strict", outcome_gate: "strict",
-    recovery: "native_store", preserves_native_state: true,
+    recovery: "checkpoint", preserves_native_state: true,
   },
 };
 
-export interface PiHarnessLike {
-  on(type: any, handler: (event: any) => any): () => void;
-  subscribe(listener: (event: any) => Promise<void> | void): () => void;
-}
-
-export function bindPiHarness(harness: PiHarnessLike, recorder: LaneRecorder): () => void {
-  const disposers: Array<() => void> = [];
+/**
+ * @spec Bind before starting a run. Awaited Agent events gate tool execution and loop advancement.
+ * @spec A recorder owns one Run; bind a new recorder for a subsequent prompt/run.
+ * @spec Native Session persistence and checkpoint selection remain caller-owned.
+ * @link spec/rfcs/0002-polyglot-adapters.md#pi-profile
+ * @link typescript/packages/pi/test/pi.test.ts
+ */
+export function bindPiHarness(agent: Agent, recorder: LaneRecorder): () => void {
+  if (agent.state.isStreaming) throw new Error("Cannot bind Pi Ledger during an active run");
+  const original = agent.streamFunction;
   const pendingTools = new Map<string, AttemptHandle>();
-  const pendingModels: AttemptHandle[] = [];
-  let turnCount = 0;
+  let pendingModel: AttemptHandle | undefined;
   let currentTurn: Turn | undefined;
-  let context: JsonValue = [];
-  let turnFailure: string | undefined;
+  let turnCount = 0;
   let runFailure: string | undefined;
-
-  disposers.push(harness.on("context", (event) => {
-    context = asJson(event.messages);
-    return { messages: event.messages };
-  }));
-  disposers.push(harness.on("before_provider_request", async (event) => {
-    if (currentTurn === undefined) throw new Error("Pi model call occurred outside a turn");
-    const payload: CallRequest = { input: context };
-    const model = modelIdentity(event.model);
-    if (model !== undefined) payload.model = model;
-    const attempt = await recorder.beforeModelCall(currentTurn.id, payload);
-    pendingModels.push(attempt);
-    return undefined;
-  }));
-  disposers.push(harness.on("tool_call", async (event) => {
-    if (currentTurn === undefined) throw new Error("Pi tool call occurred outside a turn");
-    const attempt = await recorder.beforeToolCall(
-      currentTurn.id,
-      event.toolCallId,
-      { tool_name: event.toolName, input: asJson(event.input) },
-    );
-    pendingTools.set(event.toolCallId, attempt);
-    return undefined;
-  }));
-  disposers.push(harness.on("tool_result", async (event) => {
-    const attempt = pendingTools.get(event.toolCallId);
-    if (!attempt) return undefined;
-    if (event.isError) await recorder.toolFailed(attempt, new Error(textContent(event.content)));
-    else await recorder.toolCompleted(attempt, {
-      output: { content: asJson(event.content), details: asJson(event.details) },
+  let used = false;
+  // A failed write poisons this binding: Pi may emit synthetic failure events, but those
+  // must not turn an unrecorded outcome into a successful Run or trigger another effect.
+  let writeFailure: unknown;
+  const guarded = async <T>(action: () => Promise<T>): Promise<T> => {
+    if (writeFailure) throw writeFailure;
+    try { return await action(); } catch (error) { writeFailure = error; throw error; }
+  };
+  const stream: StreamFn = async (model, context, options) => {
+    await guarded(async () => {
+      if (!currentTurn) throw new Error("Pi model call occurred outside a turn");
+      pendingModel = await recorder.beforeModelCall(currentTurn.id, {
+        model: { id: model.id, provider: model.provider }, input: asJson(context.messages),
+      });
     });
-    pendingTools.delete(event.toolCallId);
-    return undefined;
-  }));
-  disposers.push(harness.subscribe(async (event) => {
+    return original(model, context, options);
+  };
+  agent.streamFunction = stream;
+  const unsubscribe = agent.subscribe(event => guarded(async () => {
     switch (event.type) {
       case "agent_start":
-        await recorder.startRun({
-          adapter: { id: PI_ADAPTER.adapter_id, version: PI_ADAPTER.adapter_version },
-          framework: { name: PI_ADAPTER.framework },
-        });
+        if (used) throw new Error("Pi Ledger binding already recorded a Run; bind a new recorder");
+        used = true;
+        await recorder.startRun({ adapter: { id: PI_ADAPTER.adapter_id, version: PI_ADAPTER.adapter_version },
+          framework: { name: PI_ADAPTER.framework } });
         break;
       case "turn_start":
-        turnCount += 1;
-        turnFailure = undefined;
-        currentTurn = await recorder.startTurn({ turn: turnCount });
+        currentTurn = await recorder.startTurn({ turn: ++turnCount });
         break;
+      case "tool_execution_start":
+        if (!currentTurn) throw new Error("Pi tool call occurred outside a turn");
+        pendingTools.set(event.toolCallId, await recorder.beforeToolCall(currentTurn.id, event.toolCallId,
+          { tool_name: event.toolName, input: asJson(event.args) }));
+        break;
+      case "tool_execution_end": {
+        const attempt = pendingTools.get(event.toolCallId);
+        if (!attempt) throw new Error(`Pi tool ${event.toolCallId} ended without a recorded request`);
+        if (event.isError) await recorder.toolFailed(attempt, new Error(textContent(event.result.content)));
+        else await recorder.toolCompleted(attempt, { output: asJson(event.result) });
+        pendingTools.delete(event.toolCallId);
+        break;
+      }
       case "message_end": {
-        if (event.message?.role !== "assistant") break;
-        const stopReason = event.message.stopReason ?? event.message.stop_reason;
-        if (stopReason === "error" || stopReason === "aborted") {
-          turnFailure = event.message.errorMessage ?? `Pi model stopped with ${stopReason}`;
-          runFailure = turnFailure;
-        }
-        const attempt = pendingModels.shift();
+        if (event.message.role !== "assistant") break;
+        const failure = event.message.stopReason === "error" || event.message.stopReason === "aborted"
+          ? event.message.errorMessage ?? `Pi model stopped with ${event.message.stopReason}` : undefined;
+        if (failure) runFailure = failure;
+        const attempt = pendingModel;
         if (!attempt) break;
-        if (turnFailure) await recorder.modelFailed(attempt, new Error(turnFailure));
+        if (failure) await recorder.modelFailed(attempt, new Error(failure));
         else await recorder.modelCompleted(attempt, modelResult(event.message));
+        pendingModel = undefined;
         break;
       }
       case "turn_end":
-        if (currentTurn === undefined) throw new Error("Pi turn ended without a start");
-        if (turnFailure) await recorder.failTurn(currentTurn.id, new Error(turnFailure));
+        if (!currentTurn) throw new Error("Pi turn ended without a start");
+        if (runFailure) await recorder.failTurn(currentTurn.id, new Error(runFailure));
         else await recorder.completeTurn(currentTurn.id, { turn: turnCount });
         currentTurn = undefined;
         break;
@@ -105,9 +92,10 @@ export function bindPiHarness(harness: PiHarnessLike, recorder: LaneRecorder): (
         break;
     }
   }));
-
   return () => {
-    for (const dispose of disposers.reverse()) dispose();
+    if (agent.state.isStreaming) throw new Error("Cannot unbind Pi Ledger during an active run");
+    unsubscribe();
+    if (agent.streamFunction === stream) agent.streamFunction = original;
   };
 }
 
@@ -116,46 +104,17 @@ function asJson(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
-function modelIdentity(model: unknown): Model | undefined {
-  if (typeof model !== "object" || model === null) return undefined;
-  const candidate = model as Record<string, unknown>;
-  if (typeof candidate.id !== "string" || candidate.id.length === 0) return undefined;
+function modelResult(message: Extract<AgentMessage, { role: "assistant" }>): CallResponse {
   return {
-    id: candidate.id,
-    ...(typeof candidate.provider === "string" && candidate.provider.length > 0
-      ? { provider: candidate.provider }
-      : {}),
-  } satisfies Model;
-}
-
-function modelResult(message: unknown): CallResponse {
-  const payload: CallResponse = { output: asJson(message) };
-  if (typeof message !== "object" || message === null) return payload;
-  const candidate = message as Record<string, unknown>;
-  const finishReason = candidate.stopReason ?? candidate.stop_reason;
-  if (typeof finishReason === "string" && finishReason.length > 0) {
-    payload.finish_reason = finishReason;
-  }
-  const model = modelIdentity({ id: candidate.model, provider: candidate.provider });
-  if (model !== undefined) payload.model = model;
-  const usage = normalizedUsage(candidate.usage);
-  if (usage !== undefined) payload.usage = usage;
-  return payload;
-}
-
-function normalizedUsage(value: unknown): Usage | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const source = value as Record<string, unknown>;
-  const fields: Array<[keyof Usage, string]> = [
-    ["input_tokens", "input"], ["output_tokens", "output"],
-    ["cache_read_input_tokens", "cacheRead"], ["cache_write_input_tokens", "cacheWrite"],
-    ["total_tokens", "totalTokens"],
-  ];
-  const usage: Usage = {};
-  for (const [target, sourceKey] of fields) {
-    if (typeof source[sourceKey] === "number") usage[target] = source[sourceKey];
-  }
-  return Object.keys(usage).length === 0 ? undefined : { ...usage };
+    output: asJson(message), finish_reason: message.stopReason,
+    ...(message.responseModel ? { model: { id: message.responseModel, provider: message.provider } } : {}),
+    ...(message.responseId ? { provider_request_id: message.responseId } : {}),
+    usage: {
+      input_tokens: message.usage.input, output_tokens: message.usage.output,
+      cache_read_input_tokens: message.usage.cacheRead, cache_write_input_tokens: message.usage.cacheWrite,
+      total_tokens: message.usage.totalTokens,
+    },
+  };
 }
 
 function textContent(content: unknown): string {

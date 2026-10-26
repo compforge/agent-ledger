@@ -2,16 +2,55 @@
 
 Pi integration for Agent Ledger's two capabilities:
 
-- `@compforge/agent-pi/ledger`: `bindPiHarness`, `LedgerPiSessionStorage`; durable execution and native recovery storage.
+- `@compforge/agent-pi/ledger`: `bindPiHarness`, `dumpPiSession`, `restorePiSession`; durable execution and native Session checkpoints.
 - `@compforge/agent-pi/observation`: `sessionView`, `readSessionView`; native Session observations without a Ledger Store.
 
 ```ts
 import { readSessionView } from "@compforge/agent-pi/observation";
-const view = await readSessionView(storage);
+const view = await readSessionView(sessionManager);
 ```
 
 The observation entrypoint does not import Ledger Core. Native Session entries remain authoritative;
 missing model requests stay absent and tool results match only proposals on their ancestor path.
+
+## Pi runtime and recovery
+
+The adapter targets Pi **1.4.x** and is tested against `pi-agent-core`, `pi-ai` and
+`pi-coding-agent` **1.4.0**. `Agent` owns the loop; coding-agent's `SessionManager` owns native
+entries, context reconstruction, branches, compaction and context edits.
+
+```ts
+import { bindPiHarness, dumpPiSession, restorePiSession, PI_SESSION_FORMAT } from "@compforge/agent-pi/ledger";
+
+const dispose = bindPiHarness(agent, recorder); // one LaneRecorder Run per binding
+try {
+  await agent.prompt("inspect the change");
+} finally {
+  dispose();
+}
+
+// At a quiescent boundary, the caller may save this native snapshot in a CheckpointStore.
+const snapshot = dumpPiSession(sessionManager);
+const format = PI_SESSION_FORMAT;
+const restoredManager = restorePiSession(snapshot);
+```
+
+Ledger binds directly to `Agent.streamFunction` and awaited `Agent.subscribe` events. It records
+model requests before invoking the stream and tool requests before validation/hooks/execution.
+The model request is the normalized transcript (including system messages and tool declarations);
+the tool request is the proposal at `tool_execution_start`. Provider-internal retries and modified
+provider payloads are not independent Ledger Attempts. Outcome writes must finish before the loop
+advances. A failed write poisons the binding so synthetic failure events cannot mask an unrecorded
+outcome. Bind while idle, before execution, and dispose while idle; a subsequent prompt requires a
+new Run/recorder. This binding covers the Agent loop, not coding-agent background compaction calls.
+
+Native files remain the normal recovery source. Use `SessionManager.open(file)` to reopen them.
+`dumpPiSession` is opt-in for applications that choose Checkpoint storage, typically with an
+in-memory manager. It captures native entries and the active leaf, but not a running Agent,
+queued steer/followup messages or external tool effects. `restorePiSession` returns an in-memory
+manager through Pi's public API. The caller owns Checkpoint format checks, revision/retention,
+Ledger anchors and reconciliation of unfinished effects; restoration never replays tools.
+Observation capture does not create these snapshots or a duplicate native transcript.
 
 ## Supplement native Session evidence
 
@@ -24,29 +63,32 @@ If tool validation or hooks changed execution arguments from the native proposal
 argument evidence is supplemented.
 
 ```ts
-import { Session, runAgentLoop } from "@earendil-works/pi-agent-core";
+import { createAgentSession } from "@earendil-works/pi-coding-agent";
 import {
   PiObservation, observationWriter, readObservation, readSessionView,
 } from "@compforge/agent-pi/observation";
 
 const observation = new PiObservation({
-  sessionId: (await nativeStorage.getMetadata()).id,
+  sessionId: sessionManager.getSessionId(),
   write: observationWriter(observationPath, { maxBytes: 16 * 1024 * 1024 }),
   onError: error => logger.error({ error }, "Pi supplemental evidence capture failed"),
 });
-const storage = observation.storage(nativeStorage);
-const session = new Session(storage);
-const stream = observation.stream(providerStream);
+const { session } = await createAgentSession({
+  ...options, sessionManager: observation.storage(sessionManager),
+});
+// Install before prompting; the native AgentSession still owns all message appends.
+session.agent.streamFunction = observation.stream(session.agent.streamFunction);
+session.agent.beforeToolCall = observation.beforeToolCall(session.agent.beforeToolCall);
+const unsubscribe = session.agent.subscribe(event => observation.event(event));
+try {
+  await session.prompt("inspect the change");
+} finally {
+  unsubscribe();
+  session.dispose();
+}
 
-// A native AgentHarness owns this append already: give it the decorated storage instead
-// and subscribe with observation.event(event). Do not append a message twice.
-await runAgentLoop(prompts, context, config, async event => {
-  observation.event(event);
-  if (event.type === "message_end") await session.appendMessage(event.message);
-}, signal, stream);
-
-const captured = readObservation(observationPath, (await storage.getMetadata()).id);
-const view = await readSessionView(storage, captured);
+const captured = readObservation(observationPath, sessionManager.getSessionId());
+const view = await readSessionView(sessionManager, captured);
 ```
 
 Use one observer for one serialized native Session, retaining its native ID after restart and using
@@ -71,12 +113,17 @@ can contain repeated historical messages, so they still need compression and a s
 
 Calls receive stable observation IDs before execution. The storage decorator links model responses
 by object identity after native append succeeds and links tool results to observed execution events.
-It preserves native storage methods and entry IDs. Integrations that copy messages can explicitly
+It preserves synchronous `SessionManager.appendMessage`, native methods and entry IDs.
+Use the decorated manager when creating the AgentSession; public AgentSession message events occur
+before native append and are not a persistence receipt. Keep one observer bound to one native
+Session ID; create a new observer/manager binding when switching Sessions. Integrations that copy messages can explicitly
 call `modelCallId(originalMessage)` and `link(nodeId, nativeEntryId)`. No timestamp, tool-name or
 text similarity matching is performed. Native IDs remain in evidence and `attributes.native_entry_id`.
 
 Response bodies, usage and tool arguments/results are loaded from those native entries at read time.
-Actual execution arguments that differ from the native proposal take precedence when captured.
+Pi emits tool start before validation. `beforeToolCall` wraps the existing hook and captures
+validated/hook-edited arguments immediately before execution; those override the native proposal.
+Install the observer after the caller has configured its tool hook.
 Small runtime errors can remain in supplemental metadata when no native result was persisted. If a
 native entry is absent, the view retains observed timing/status and exposes the missing body; it does
 not replace the native Session with a second complete execution log. Native outcomes take precedence
@@ -107,7 +154,7 @@ failure or replay. Capture can be disabled entirely when native evidence suffice
 
 ```ts
 const captured = readObservation(orderedSegmentPaths, nativeSessionId);
-const view = await readSessionView(nativeStorage, captured);
+const view = await readSessionView(sessionManager, captured);
 ```
 
 The reader retains complete prefixes of truncated/corrupt segments and reports gaps. A writer refuses

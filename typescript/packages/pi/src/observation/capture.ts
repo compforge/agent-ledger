@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { AgentEvent, SessionStorage, SessionTreeEntry, StreamFn } from "@earendil-works/pi-agent-core";
+import type { Agent, AgentEvent, StreamFn } from "@earendil-works/pi-agent-core";
+import type { SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { JsonValue } from "@compforge/agent-common";
 import type { ModelCall, Node, Operation, ToolCall } from "@compforge/agent-observation";
 
@@ -128,7 +129,7 @@ export class PiObservation {
       const proposal = this.proposals.get(event.toolCallId);
       this.safely(() => this.node({ id, kind: "tool_call", tool_call_id: event.toolCallId,
         ...(proposal ? { model_call_id: proposal.modelId } : {}),
-        // Native proposals suffice unless validation/hooks changed the actual execution arguments.
+        // Start events carry proposals. beforeToolCall captures validated/hook-modified arguments.
         ...(!proposal || proposal.name !== event.toolName || !isDeepStrictEqual(proposal.input, event.args)
           ? { request: { tool_name: event.toolName, input: json(event.args) } } : {}),
         started_at: now(), name: event.toolName } as ToolCall));
@@ -141,8 +142,22 @@ export class PiObservation {
     }
   }
 
+  /** Wrap after the caller's existing hook; Pi's start event precedes validation and hook edits. */
+  beforeToolCall(hook?: Agent["beforeToolCall"]): NonNullable<Agent["beforeToolCall"]> {
+    return async (context, signal) => {
+      const result = await hook?.(context, signal);
+      const tool = this.tools.get(context.toolCall.id);
+      const proposal = this.proposals.get(context.toolCall.id);
+      if (!result?.block && tool && (!proposal || !isDeepStrictEqual(proposal.input, context.args))) {
+        this.safely(() => this.node({ id: tool.id, kind: "tool_call",
+          request: { tool_name: context.toolCall.name, input: json(context.args) } } as ToolCall));
+      }
+      return result;
+    };
+  }
+
   /** Caller supplies the delivery mode only AFTER Pi has applied and persisted this user entry. */
-  input(entry: SessionTreeEntry, mode: string): void {
+  input(entry: SessionEntry, mode: string): void {
     if (entry.type !== "message" || entry.message.role !== "user") throw new Error("Expected an applied native user entry");
     this.safely(() => this.write({ type: "input", entryId: entry.id, mode }));
   }
@@ -154,7 +169,7 @@ export class PiObservation {
   modelCallId(message: object): string | undefined { return this.responses.get(message); }
 
   /** Called AFTER native append. Object identity establishes model linkage, never text/timing similarity. */
-  entry(entry: SessionTreeEntry): void {
+  entry(entry: SessionEntry): void {
     if (entry.type !== "message") return;
     if (entry.message.role === "assistant") {
       const id = this.responses.get(entry.message);
@@ -165,13 +180,16 @@ export class PiObservation {
     }
   }
 
-  /** Opt-in native storage decoration; all persistence and recovery still belong to Pi. */
-  storage<T extends SessionStorage>(storage: T): T {
+  /** Decorate native appendMessage; all persistence and context reconstruction belong to Pi. */
+  storage<T extends SessionManager>(storage: T): T {
+    if (storage.getSessionId() !== this.options.sessionId) throw new Error("Pi observation Session mismatch");
     const observation = this;
     return new Proxy(storage, { get(target, key) {
-      if (key === "appendEntry") return async (entry: SessionTreeEntry) => {
-        await target.appendEntry(entry);
-        observation.entry(entry);
+      if (key === "appendMessage") return (...args: Parameters<SessionManager["appendMessage"]>) => {
+        const id = target.appendMessage(...args);
+        const entry = target.getEntry(id);
+        if (entry) observation.entry(entry);
+        return id;
       };
       const value = Reflect.get(target, key, target);
       return typeof value === "function" ? value.bind(target) : value;
