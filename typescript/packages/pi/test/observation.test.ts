@@ -25,24 +25,24 @@ test("Pi observation preserves append order, branch ownership and stable IDs acr
   ];
   const before = structuredClone(entries);
   const observed = sessionView(metadata, entries);
-  assert.deepEqual(observed.items.map(x => x.id), ["input", "first", "branch", "result"]);
-  const result = observed.items[3] as ToolCall;
+  assert.deepEqual(observed.nodes.map(x => x.id), ["input", "first", "branch", "result"]);
+  const result = observed.nodes[3] as ToolCall;
   assert.equal(result.model_call_id, "first");
   assert.deepEqual(result.request!.input, {value: "A"});
-  assert.equal((observed.items[1] as ModelCall).request, undefined);
-  assert.equal((observed.items[1] as ModelCall).response!.model, undefined);
-  assert.equal((observed.items[1] as ModelCall).response!.usage!.input_tokens, 0);
+  assert.equal((observed.nodes[1] as ModelCall).request, undefined);
+  assert.equal((observed.nodes[1] as ModelCall).response!.model, undefined);
+  assert.equal((observed.nodes[1] as ModelCall).response!.usage!.input_tokens, 0);
   entries.push({type: "message", id: "followup", parentId: "result", timestamp, message: {role: "user", content: "next", timestamp: 0}});
   const extended = sessionView(metadata, entries);
-  assert.deepEqual(extended.items.slice(0, 4), observed.items);
+  assert.deepEqual(extended.nodes.slice(0, 4), observed.nodes);
   result.request!.input = "changed";
   assert.deepEqual(entries.slice(0, 4), before);
 });
 
 test("Pi keeps orphan results and proposals without manufacturing invocations", () => {
   const observed = sessionView(metadata, [assistant("proposal", null, "A"), tool("orphan", "not-observed")]);
-  assert.equal(observed.items.filter(x => x.kind === "tool_call").length, 1);
-  const result = observed.items[1] as ToolCall;
+  assert.equal(observed.nodes.filter(x => x.kind === "tool_call").length, 1);
+  const result = observed.nodes[1] as ToolCall;
   assert.equal(result.request, undefined);
   assert.equal(result.model_call_id, undefined);
   assert.ok(result.response);

@@ -7,7 +7,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import ValidationError
 from referencing import Registry, Resource
 
-from agent_ledger.observation import JobView, Operation, SessionView
+from agent_ledger.observation import JobView, Operation, SessionView, inspect, select_nodes
 
 ROOT = Path(__file__).parents[2]
 
@@ -32,7 +32,7 @@ def test_job_contract_roundtrip(name, gaps):
     schema().validate(raw)
     job = JobView.model_validate(raw)
     assert job.model_dump(mode="json", exclude_unset=True) == raw
-    assert len(job.reference_issues()) == gaps
+    assert len(inspect(job).issues) == gaps
     assert raw == before
     assert job.status == "completed"
 
@@ -40,25 +40,18 @@ def test_job_contract_roundtrip(name, gaps):
 def test_task_oriented_session_and_job_share_exact_items():
     raw = fixture("session-view.json")
     session = SessionView.model_validate(raw)
-    items = copy.deepcopy(raw["items"])
+    nodes = select_nodes(session, [node.id for node in session.nodes])
+    job = JobView(job={"source": "test", "id": "task"}, nodes=nodes)
+    assert not inspect(job).issues
 
-    def attach(items):
-        for item in items:
-            item["session"] = raw["session"]
-            attach(item.get("items", []))
-
-    attach(items)
-    job = JobView(job={"source": "test", "id": "task"}, items=items)
-    assert not job.reference_issues()
-
-    def strip(items):
-        for item in items:
+    def strip(nodes):
+        for item in nodes:
             item.pop("session", None)
-            strip(item.get("items", []))
+            strip(item.get("nodes", []))
 
-    observed = job.model_dump(mode="json")["items"]
+    observed = job.model_dump(mode="json")["nodes"]
     strip(observed)
-    assert observed == session.model_dump(mode="json")["items"]
+    assert observed == session.model_dump(mode="json")["nodes"]
 
 
 @pytest.mark.parametrize(
@@ -76,15 +69,15 @@ def test_task_oriented_session_and_job_share_exact_items():
 def test_invalid_job_graph(change):
     raw = fixture("job-review.json")
     if change == "duplicate":
-        raw["items"][1]["items"].append(copy.deepcopy(raw["items"][1]["items"][0]))
+        raw["nodes"][1]["nodes"].append(copy.deepcopy(raw["nodes"][1]["nodes"][0]))
     elif change == "foreign_session":
         native = fixture("session-view.json")
-        native["items"][0]["session"] = {"source": "elsewhere", "id": "foreign"}
+        native["nodes"][0]["session"] = {"source": "elsewhere", "id": "foreign"}
         with pytest.raises(ValidationError, match="foreign Session"):
             SessionView.model_validate(native)
         return
     elif change == "wrong_kind":
-        raw["items"][1]["items"][1]["model_call_id"] = "t1"
+        raw["nodes"][1]["nodes"][1]["model_call_id"] = "t1"
     elif change == "missing_local":
         raw["relations"][0]["target"] = {"id": "absent"}
     elif change == "bad_time":
@@ -107,8 +100,8 @@ def test_partial_external_links_stay_explicit_and_job_local_links_are_strict():
         }
     )
     job = JobView.model_validate(raw)
-    assert len(job.reference_issues()) == 2
-    raw["items"][2]["items"][1].pop("session")
+    assert len(inspect(job).issues) == 2
+    raw["nodes"][2]["nodes"][1].pop("session")
     with pytest.raises(ValidationError, match="missing model call"):
         JobView.model_validate(raw)
 
@@ -117,16 +110,16 @@ def test_shared_call_is_not_reidentified_or_cost_allocated_per_job():
     first = JobView.model_validate(fixture("job-input.json"))
     second = first.model_copy(deep=True)
     second.job.id = "input-b"
-    a, b = first.items[2], second.items[2]
+    a, b = first.nodes[2], second.nodes[2]
     assert isinstance(a, Operation) and isinstance(b, Operation)
-    assert a.items == b.items
-    assert a.items[0].id == "m1"
-    assert a.items[0].session == b.items[0].session
+    assert a.nodes == b.nodes
+    assert a.nodes[0].id == "m1"
+    assert a.nodes[0].session == b.nodes[0].session
     assert "usage" not in first.model_dump()
 
 
 def test_explicit_null_goal_and_result_are_distinct_from_absence():
-    raw = {"job": {"source": "test", "id": "task"}, "items": []}
+    raw = {"job": {"source": "test", "id": "task"}, "nodes": []}
     assert "result" not in JobView.model_validate(raw).model_dump()
     assert (
         JobView.model_validate({**raw, "goal": None, "result": None}).model_dump()["result"] is None

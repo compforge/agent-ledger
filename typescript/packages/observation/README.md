@@ -5,15 +5,14 @@ follows one task across Sessions. Both use Input, ModelCall, ToolCall, Operation
 requires Ledger storage. Source adapters supply business correlation and task outcomes.
 
 ```ts
-import { renderHTML, validate, referenceIssues, type JobView } from "@compforge/agent-observation";
+import { renderHTML, inspect, type JobView } from "@compforge/agent-observation";
 const job: JobView = {
   schema_version: "agent-ledger/job@1",
   job: { source: "application", id: "task-1" },
   goal: "Inspect the proposed change",
-  items: [],
+  nodes: [],
 };
-validate(job);
-const gaps = referenceIssues(job);
+const gaps = inspect(job).issues;
 const html = renderHTML(job);
 ```
 

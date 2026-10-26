@@ -33,9 +33,9 @@ def test_native_view_round_trip_and_schema() -> None:
     schema_validator().validate(raw)
     document = SessionView.model_validate(raw)
     assert document.model_dump(mode="json", exclude_unset=True) == raw
-    turn = document.items[1]
+    turn = document.nodes[1]
     assert isinstance(turn, Turn)
-    model, tool = turn.items[:2]
+    model, tool = turn.nodes[:2]
     assert isinstance(model, ModelCall) and isinstance(tool, ToolCall)
     assert model.request is not None and tool.request is not None
     assert [m["role"] for m in model.request.input["messages"]] == [
@@ -50,15 +50,15 @@ def test_native_view_round_trip_and_schema() -> None:
 @pytest.mark.parametrize("change", ["duplicate", "negative_usage", "missing_model", "reverse_time"])
 def test_invalid_view(change: str) -> None:
     raw = fixture("session-view.json")
-    items = raw["items"][1]["items"]
+    nodes = raw["nodes"][1]["nodes"]
     if change == "duplicate":
-        items[1]["id"] = items[0]["id"]
+        nodes[1]["id"] = nodes[0]["id"]
     elif change == "negative_usage":
-        items[0]["response"]["usage"]["input_tokens"] = -1
+        nodes[0]["response"]["usage"]["input_tokens"] = -1
     elif change == "missing_model":
-        items[1]["model_call_id"] = "absent"
+        nodes[1]["model_call_id"] = "absent"
     else:
-        items[1].update(started_at="2026-10-25T01:00:00Z", finished_at="2026-10-25T00:00:00Z")
+        nodes[1].update(started_at="2026-10-25T01:00:00Z", finished_at="2026-10-25T00:00:00Z")
     with pytest.raises(ValidationError):
         SessionView.model_validate(raw)
 
@@ -68,9 +68,9 @@ def test_ledger_projection_preserves_calls_parallelism_and_gaps() -> None:
     source = LedgerSessionView.model_validate(data["source"])
     before = source.model_copy(deep=True)
     document = session_view(source)
-    turns = [item for item in document.items if isinstance(item, Turn)]
+    turns = [item for item in document.nodes if isinstance(item, Turn)]
     calls = [
-        item for turn in turns for item in turn.items if isinstance(item, (ModelCall, ToolCall))
+        item for turn in turns for item in turn.nodes if isinstance(item, (ModelCall, ToolCall))
     ]
     assert [call.id for call in calls] == data["call_ids"]
     assert [call.status for call in calls] == data["statuses"]
@@ -97,8 +97,8 @@ def test_conflicting_terminals_remain_visible() -> None:
     )
     data["source"]["events"].append(event)
     document = session_view(LedgerSessionView.model_validate(data["source"]))
-    turn = next(item for item in document.items if isinstance(item, Turn))
-    call = next(item for item in turn.items if item.id == data["call_ids"][1])
+    turn = next(item for item in document.nodes if isinstance(item, Turn))
+    call = next(item for item in turn.nodes if item.id == data["call_ids"][1])
     assert isinstance(call, ModelCall)
     assert call.status == "unknown" and call.response is None
     assert len(call.attributes["terminal_observations"]) == 2
@@ -126,9 +126,9 @@ async def test_recorder_accepts_shared_call_types() -> None:
     result = session_view(await store.load_session("shared"))
     call = next(
         item
-        for t in result.items
+        for t in result.nodes
         if isinstance(t, Turn)
-        for item in t.items
+        for item in t.nodes
         if isinstance(item, ModelCall)
     )
     assert call.response is not None
@@ -163,8 +163,8 @@ async def test_typed_failed_calls_keep_structured_error_and_event_details():
         details=vector["details"],
     )
     document = session_view(await store.load_session("s"))
-    projected_turn = next(n for n in document.items if isinstance(n, Turn))
-    call = next(n for n in projected_turn.items if isinstance(n, ModelCall))
+    projected_turn = next(n for n in document.nodes if isinstance(n, Turn))
+    call = next(n for n in projected_turn.nodes if isinstance(n, ModelCall))
     assert isinstance(call, ModelCall)
     assert call.status == "failed"
     assert call.request.model_dump(mode="json", exclude_unset=True) == vector["request"]

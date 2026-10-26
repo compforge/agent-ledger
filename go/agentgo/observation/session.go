@@ -19,7 +19,7 @@ import (
 // +spec=`Call identity includes run, execution and attempt; EOF does not establish an outcome`
 // +link=docs/observation.md
 func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionView, error) {
-	result := view.SessionView{SchemaVersion: view.SessionSchemaVersion, Items: view.Items{}}
+	result := view.SessionView{SchemaVersion: view.SessionSchemaVersion, Nodes: view.Nodes{}}
 	if messageCodec == nil {
 		var err error
 		messageCodec, err = agentgo.NewCodec()
@@ -38,7 +38,10 @@ func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionVi
 		}
 		return message
 	}
-	calls := map[string]view.Item{}
+	calls := map[string]interface {
+		Kind() string
+		Base() *view.Node
+	}{}
 	terminal := map[string]bool{}
 	read, err := session.Read(reader, func(record session.Record) error {
 		base := view.Node{ID: fmt.Sprintf("record:%d", record.Seq), RunID: record.RunID,
@@ -48,7 +51,7 @@ func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionVi
 		// Preserve native records as evidence even where their semantics are not modeled.
 		operation := func() {
 			base.StartedAt = timestamp
-			result.Items = append(result.Items, &view.Operation{Node: base, Operation: "agentgo." + record.Type, Data: record.Data})
+			result.Nodes = append(result.Nodes, &view.Operation{Node: base, Operation: "agentgo." + record.Type, Data: record.Data})
 		}
 		kind := ""
 		switch agentgo.EventType(record.Type) {
@@ -60,7 +63,7 @@ func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionVi
 			message := decodeMessage(data.Message, base.ID)
 			if message != nil && message.GetRole() == agentgo.RoleUser {
 				base.StartedAt = timestamp
-				result.Items = append(result.Items, &view.Input{Node: base, Content: data.Message})
+				result.Nodes = append(result.Nodes, &view.Input{Node: base, Content: data.Message})
 			} else {
 				operation()
 			}
@@ -95,7 +98,7 @@ func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionVi
 				call = &view.ToolCall{Node: base, ToolCallID: data.ToolID}
 			}
 			calls[key] = call
-			result.Items = append(result.Items, call)
+			result.Nodes = append(result.Nodes, call)
 		}
 		node := call.Base()
 		node.Evidence = append(node.Evidence, view.SourceRef{Source: "agentgo", ID: fmt.Sprint(record.Seq)})
@@ -174,7 +177,7 @@ func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionVi
 		result.Issues = append(result.Issues, "unterminated final record not observed")
 	}
 	// Traverse source order, not map iteration, so repeated snapshots are deterministic.
-	for _, call := range result.Items {
+	for _, call := range result.Nodes {
 		if call.Kind() != "model_call" && call.Kind() != "tool_call" {
 			continue
 		}

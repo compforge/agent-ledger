@@ -6,7 +6,7 @@
   "required": [
     "schema_version",
     "job",
-    "items"
+    "nodes"
   ],
   "properties": {
     "schema_version": {
@@ -38,12 +38,6 @@
       "type": "string",
       "format": "date-time"
     },
-    "items": {
-      "type": "array",
-      "items": {
-        "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/observation.schema.json#/$defs/item"
-      }
-    },
     "relations": {
       "type": "array",
       "items": {
@@ -57,6 +51,12 @@
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/observation.schema.json#/$defs/node"
       }
     }
   },

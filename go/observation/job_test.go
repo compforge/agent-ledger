@@ -28,8 +28,8 @@ func TestJobContract(t *testing.T) {
 			if err := view.Validate(); err != nil {
 				t.Fatal(err)
 			}
-			issues, err := view.ReferenceIssues()
-			if err != nil || len(issues) != gaps {
+			issues, err := view.Inspect()
+			if err != nil || len(issues.Issues) != gaps {
 				t.Fatalf("issues %v, %v", issues, err)
 			}
 			raw, _ := os.ReadFile("../../conformance/vectors/" + name)
@@ -48,30 +48,30 @@ func TestJobContract(t *testing.T) {
 }
 func TestJobReferenceValidation(t *testing.T) {
 	view := jobFixture(t, "job-review.json")
-	group := view.Items[1].(*Operation)
-	group.Items = append(group.Items, group.Items[0])
+	group := view.Nodes[1].(*Operation)
+	group.Nodes = append(group.Nodes, group.Nodes[0])
 	if view.Validate() == nil {
-		t.Fatal("duplicate Session item accepted")
+		t.Fatal("duplicate Session node accepted")
 	}
 	view = jobFixture(t, "job-review.json")
-	group = view.Items[1].(*Operation)
-	group.Items[1].(*ToolCall).ModelCallID = "t1"
+	group = view.Nodes[1].(*Operation)
+	group.Nodes[1].(*ToolCall).ModelCallID = "t1"
 	if view.Validate() == nil {
 		t.Fatal("non-model target accepted")
 	}
 	view = jobFixture(t, "job-input.json")
-	view.Relations = append(view.Relations, Relation{Kind: "depends_on", Source: ItemRef{ID: "assess"}, Target: ItemRef{ID: "missing", Session: &common.SessionRef{Source: "pi", ID: "other"}}})
-	issues, err := view.ReferenceIssues()
-	if err != nil || len(issues) != 2 {
+	view.Relations = append(view.Relations, Relation{Kind: "depends_on", Source: NodeRef{ID: "assess"}, Target: NodeRef{ID: "missing", Session: &common.SessionRef{Source: "pi", ID: "other"}}})
+	issues, err := view.Inspect()
+	if err != nil || len(issues.Issues) != 2 {
 		t.Fatalf("partial references %v %v", issues, err)
 	}
 	view.Relations[1].Target.Session = nil
 	if view.Validate() == nil {
-		t.Fatal("missing local item accepted")
+		t.Fatal("missing local node accepted")
 	}
 }
 func TestSessionRejectsForeignItems(t *testing.T) {
-	view := SessionView{SchemaVersion: SessionSchemaVersion, Session: common.SessionRef{Source: "pi", ID: "s"}, Items: Items{&ModelCall{Node: Node{ID: "m", Session: &common.SessionRef{Source: "pi", ID: "other"}}}}}
+	view := SessionView{SchemaVersion: SessionSchemaVersion, Session: common.SessionRef{Source: "pi", ID: "s"}, Nodes: Nodes{&ModelCall{Node: Node{ID: "m", Session: &common.SessionRef{Source: "pi", ID: "other"}}}}}
 	if view.Validate() == nil {
 		t.Fatal("foreign session accepted")
 	}
@@ -79,7 +79,7 @@ func TestSessionRejectsForeignItems(t *testing.T) {
 func TestJobCompletionAndSharedCostAreSourceFacts(t *testing.T) {
 	a, b := jobFixture(t, "job-input.json"), jobFixture(t, "job-input.json")
 	b.Job.ID = "input-b"
-	if !reflect.DeepEqual(a.Items, b.Items) {
+	if !reflect.DeepEqual(a.Nodes, b.Nodes) {
 		t.Fatal("shared calls changed")
 	}
 	a.Goal = json.RawMessage("null")

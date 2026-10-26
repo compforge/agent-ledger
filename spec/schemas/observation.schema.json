@@ -299,18 +299,18 @@
           "minLength": 1
         },
         "data": {},
-        "items": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/item"
-          }
-        },
         "run_id": {
           "type": "string",
           "minLength": 1
         },
         "session": {
           "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/node"
+          }
         }
       },
       "required": [
@@ -364,45 +364,26 @@
         "kind": {
           "const": "turn"
         },
-        "items": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/item"
-          }
-        },
         "run_id": {
           "type": "string",
           "minLength": 1
         },
         "session": {
           "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/node"
+          }
         }
       },
       "required": [
         "id",
         "kind",
-        "items"
+        "nodes"
       ],
       "additionalProperties": false
-    },
-    "item": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/input"
-        },
-        {
-          "$ref": "#/$defs/model_call"
-        },
-        {
-          "$ref": "#/$defs/tool_call"
-        },
-        {
-          "$ref": "#/$defs/operation"
-        },
-        {
-          "$ref": "#/$defs/turn"
-        }
-      ]
     },
     "job": {
       "type": "object",
@@ -422,22 +403,6 @@
       ],
       "additionalProperties": false
     },
-    "item_ref": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "session": {
-          "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
-        }
-      },
-      "required": [
-        "id"
-      ],
-      "additionalProperties": false
-    },
     "relation": {
       "type": "object",
       "properties": {
@@ -448,10 +413,10 @@
           ]
         },
         "source": {
-          "$ref": "#/$defs/item_ref"
+          "$ref": "#/$defs/node_ref"
         },
         "target": {
-          "$ref": "#/$defs/item_ref"
+          "$ref": "#/$defs/node_ref"
         },
         "evidence": {
           "type": "array",
@@ -464,6 +429,41 @@
         "kind",
         "source",
         "target"
+      ],
+      "additionalProperties": false
+    },
+    "node": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/input"
+        },
+        {
+          "$ref": "#/$defs/model_call"
+        },
+        {
+          "$ref": "#/$defs/tool_call"
+        },
+        {
+          "$ref": "#/$defs/operation"
+        },
+        {
+          "$ref": "#/$defs/turn"
+        }
+      ]
+    },
+    "node_ref": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session": {
+          "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
+        }
+      },
+      "required": [
+        "id"
       ],
       "additionalProperties": false
     }

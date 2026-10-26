@@ -65,8 +65,10 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
     只汇总终态事实、Checkpoint link 和未决 Attempt，不选择控制状态或恢复策略。
 
 11. `common` 表达真正共享的身份与调用事实；Ledger 侧重 Session 的可恢复性，`observation`
-    提供 SessionView 和 JobView 两种可评估的观察视角，共用 Item 模型。一个 SessionView 只表达一个
+    提供 SessionView 和 JobView 两种可评估的观察视角，共用 Node 模型。一个 SessionView 只表达一个
     Agent Session；JobView 围绕任务组织多个 Session 的相关执行片段。followup/resume 不自动新建 Session。
+    Node 承载公共事实，具体类型扩展它；包内按 node、session、job、inspect 和 render 组织。
+    业务侧决定 Job 归属，selectNodes 只负责安全选取；inspect 不推断执行或业务成功。
 12. 同名但职责不同的类型可以留在各包，例如 Ledger 查询用的 SessionView 与 observation.SessionView；
     同时使用时 alias，只有语义与契约一致的类型才进入 common。
 13. Pi、AgentGo 的适配各归一个库目录，分别提供 ledger 与 observation 入口。原生 Session 可直接

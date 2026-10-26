@@ -2,7 +2,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { renderHTML } from "./render.js";
-import type { View } from "./model.js";
+import type { View } from "./inspect.js";
 
 try {
   const {values, positionals} = parseArgs({allowPositionals: true, options: {

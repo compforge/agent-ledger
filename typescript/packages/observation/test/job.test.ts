@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
-  validate, referenceIssues, renderHTML,
-  type JobView, type SessionView, type Operation, type ToolCall, type Item,
+  validate, inspect, renderHTML, selectNodes,
+  type JobView, type SessionView, type Operation, type ToolCall,
 } from "../src/index.js";
 
 function fixture(name: string): unknown {
@@ -19,49 +19,42 @@ test("Job fixtures preserve native IDs, cross-session calls, nesting and partial
     const job = jobFixture(name);
     const before = JSON.stringify(job);
     validate(job);
-    assert.equal(referenceIssues(job).length, gaps);
+    assert.equal(inspect(job).issues.length, gaps);
     assert.equal(JSON.stringify(job), before);
     assert.equal(job.status, "completed");
     const html = renderHTML(job);
     assert.match(html, /Execution Session/);
     assert.match(html, /not an exclusive job cost/);
-    assert.match(html, /Relations/);
+    assert.match(html, /Dependencies and handoffs/);
   }
 });
 
 test("task-oriented Job uses the same observations as its Session", () => {
   const session = fixture("session-view.json") as SessionView;
   const original = JSON.stringify(session);
-  const items = structuredClone(session.items);
-  function attach(items: Item[]): void {
-    for (const item of items) {
-      item.session = session.session;
-      if (item.kind === "turn" || item.kind === "operation") attach(item.items ?? []);
-    }
-  }
-  attach(items);
+  const nodes = selectNodes(session, session.nodes.map(node => node.id));
   const job: JobView = {
     schema_version: "agent-ledger/job@1",
     job: {source: "test", id: "task"},
-    items,
+    nodes,
   };
   validate(job);
-  assert.deepEqual(referenceIssues(job), []);
+  assert.deepEqual(inspect(job).issues, []);
   assert.equal(JSON.stringify(session), original);
 });
 
 test("graph validation is scoped by Session, not by bare IDs or parent grouping", () => {
   const job = jobFixture("job-review.json");
-  const discover = job.items[1] as Operation;
-  discover.items!.push(structuredClone(discover.items![0]!));
+  const discover = job.nodes[1] as Operation;
+  discover.nodes!.push(structuredClone(discover.nodes![0]!));
   assert.throws(() => validate(job), /duplicate/);
 
   const wrong = jobFixture("job-review.json");
-  ((wrong.items[1] as Operation).items![1] as ToolCall).model_call_id = "t1";
+  ((wrong.nodes[1] as Operation).nodes![1] as ToolCall).model_call_id = "t1";
   assert.throws(() => validate(wrong), /not a model call/);
 
   const session = fixture("session-view.json") as SessionView;
-  session.items[0]!.session = {source: "elsewhere", id: "foreign"};
+  session.nodes[0]!.session = {source: "elsewhere", id: "foreign"};
   assert.throws(() => validate(session), /foreign Session/);
 });
 
@@ -72,17 +65,17 @@ test("missing external fragments stay visible while local references are strict"
     source: {id: "assess"},
     target: {session: {source: "pi", id: "other"}, id: "missing"},
   });
-  assert.equal(referenceIssues(job).length, 2);
+  assert.equal(inspect(job).issues.length, 2);
   assert.match(renderHTML(job), /outside Job snapshot/);
   job.relations![1]!.target = {id: "missing"};
-  assert.throws(() => validate(job), /missing job item/);
+  assert.throws(() => validate(job), /missing job node/);
 });
 
 test("shared call keeps its identity and full recorded usage across job views", () => {
   const a = jobFixture("job-input.json");
   const b = structuredClone(a);
   b.job.id = "input-b";
-  assert.deepEqual(a.items, b.items);
+  assert.deepEqual(a.nodes, b.nodes);
   assert.equal("usage" in a, false);
   a.result = null;
   a.goal = null;

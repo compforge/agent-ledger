@@ -14,7 +14,31 @@
       "f1"
     ]
   },
-  "items": [
+  "relations": [
+    {
+      "kind": "handoff",
+      "source": {
+        "id": "discover"
+      },
+      "target": {
+        "id": "verify"
+      }
+    },
+    {
+      "kind": "depends_on",
+      "source": {
+        "id": "hypothesis-a"
+      },
+      "target": {
+        "id": "m1",
+        "session": {
+          "source": "agentgo",
+          "id": "r1"
+        }
+      }
+    }
+  ],
+  "nodes": [
     {
       "kind": "input",
       "id": "input",
@@ -26,7 +50,7 @@
       "kind": "operation",
       "id": "discover",
       "operation": "review.discover",
-      "items": [
+      "nodes": [
         {
           "kind": "model_call",
           "id": "m1",
@@ -79,12 +103,12 @@
       "kind": "operation",
       "id": "verify",
       "operation": "review.verify",
-      "items": [
+      "nodes": [
         {
           "kind": "operation",
           "id": "hypothesis-a",
           "operation": "verify.hypothesis",
-          "items": [
+          "nodes": [
             {
               "kind": "model_call",
               "id": "m1",
@@ -144,30 +168,6 @@
           }
         }
       ]
-    }
-  ],
-  "relations": [
-    {
-      "kind": "handoff",
-      "source": {
-        "id": "discover"
-      },
-      "target": {
-        "id": "verify"
-      }
-    },
-    {
-      "kind": "depends_on",
-      "source": {
-        "id": "hypothesis-a"
-      },
-      "target": {
-        "id": "m1",
-        "session": {
-          "source": "agentgo",
-          "id": "r1"
-        }
-      }
     }
   ]
 }

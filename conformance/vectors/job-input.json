@@ -9,7 +9,21 @@
     "decision": "silent"
   },
   "status": "completed",
-  "items": [
+  "relations": [
+    {
+      "kind": "handoff",
+      "source": {
+        "id": "route"
+      },
+      "target": {
+        "id": "assess"
+      }
+    }
+  ],
+  "issues": [
+    "Only observations explicitly associated with this input are included."
+  ],
+  "nodes": [
     {
       "kind": "input",
       "id": "input",
@@ -27,7 +41,7 @@
       "kind": "operation",
       "id": "assess",
       "operation": "input.assess",
-      "items": [
+      "nodes": [
         {
           "kind": "model_call",
           "id": "m1",
@@ -79,19 +93,5 @@
         }
       ]
     }
-  ],
-  "relations": [
-    {
-      "kind": "handoff",
-      "source": {
-        "id": "route"
-      },
-      "target": {
-        "id": "assess"
-      }
-    }
-  ],
-  "issues": [
-    "Only observations explicitly associated with this input are included."
   ]
 }
