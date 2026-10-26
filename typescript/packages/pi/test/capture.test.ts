@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -58,8 +59,16 @@ test("real Pi loop links native entries to stable calls; restart, branches and c
   let view = await readSessionView(native, readObservation(f.path, metadata.id));
   const models = view.nodes.filter(n => n.kind === "model_call") as ModelCall[];
   const tools = view.nodes.filter(n => n.kind === "tool_call") as ToolCall[];
+  const supplement = readObservation(f.path, metadata.id);
+  for (const node of supplement.nodes) {
+    assert.equal(node.attributes?.context, undefined);
+    assert.equal((node as ModelCall).response?.output, undefined);
+    if (node.kind === "tool_call") assert.equal((node as ToolCall).request, undefined);
+  }
   assert.equal(models.length, 2);
   assert.equal(tools.length, 1);
+  assert.deepEqual(tools[0]!.request!.input, { key: "x" });
+  assert.ok(JSON.stringify(tools[0]!.response!.output).includes("found"));
   assert.equal(tools[0]!.model_call_id, models[0]!.id);
   assert.equal(models[0]!.response!.usage!.input_tokens, 0);
   assert.equal((models[0]!.request!.input as Record<string, unknown>).transformed, true);
@@ -69,6 +78,8 @@ test("real Pi loop links native entries to stable calls; restart, branches and c
   const firstIds = view.nodes.map(n => n.id);
   const user = (await native.getEntries()).find(e => e.type === "message" && e.message.role === "user")!;
   capture.input(user, "initial");
+  assert.deepEqual(readObservation(f.path, metadata.id).inputs, [{ entryId: user.id, mode: "initial" }]);
+  assert.equal(readObservation(f.path, metadata.id).nodes.some(n => n.kind === "input"), false);
 
   // Fresh observer and native storage, as after a process restart. The observer does not replay state.
   native = new InMemorySessionStorage({ metadata, entries: JSON.parse(JSON.stringify(await native.getEntries())) });
@@ -182,7 +193,7 @@ test("unfinished tools and lost terminal records keep native outcomes without fa
   assert.equal(partial.nodes[0]!.status, "unknown");
   const response = message();
   const native: SessionTreeEntry = { type: "message", id: "result", parentId: null, timestamp: metadata.createdAt, message: response };
-  const restored = sessionView(metadata, [native], { sessionId: metadata.id, issues: ["node lost: completion not observed"],
+  const restored = sessionView(metadata, [native], { sessionId: metadata.id, inputs: [], issues: ["node lost: completion not observed"],
     nodes: [{ id: "lost", kind: "model_call", status: "unknown", started_at: metadata.createdAt }],
     links: [{ nodeId: "lost", entryId: "result" }] });
   assert.equal(restored.nodes[0]!.status, "completed");
@@ -203,4 +214,68 @@ test("partial tail is retained and new segments can be read together", async t =
   const recovered = readObservation([f.path, nextPath], metadata.id);
   assert.equal(recovered.nodes.filter(n => n.kind === "model_call").length, 2);
   assert.ok(recovered.issues.some(x => x.includes("incomplete trailing")));
+});
+
+test("compressed supplemental requests remain exact and occupy less disk than repeated plain JSON", async t => {
+  const f = fixture(t), records: import("../src/observation/index.js").PiObservationRecord[] = [];
+  const write = observationWriter(f.path);
+  const capture = new PiObservation({ sessionId: metadata.id, write: record => { records.push(record); write(record); }, onError: e => f.errors.push(e) });
+  const text = "message context and tool definitions ".repeat(2000);
+  const payload = { system: text, messages: Array.from({ length: 10 }, (_, n) => ({ role: "user", content: `${n}:${text}` })) };
+  for (let n = 0; n < 10; n++) {
+    await (await capture.stream(provider())(model, { messages: [] }, { onPayload: () => payload })).result();
+  }
+  const projected = sessionView(metadata, [], readObservation(f.path, metadata.id));
+  for (const node of projected.nodes as ModelCall[]) assert.deepEqual(node.request!.input, payload);
+  const plainBytes = Buffer.byteLength(records.map(r => JSON.stringify(r)).join("\n"));
+  const diskBytes = statSync(f.path).size;
+  assert.ok(diskBytes < plainBytes / 5, `compressed=${diskBytes} plain=${plainBytes}`);
+  assert.deepEqual(f.errors, []);
+});
+
+test("disk budget persists an evidence gap and stays capped after restart", async t => {
+  const f = fixture(t), maxBytes = 2048;
+  const write = observationWriter(f.path, { maxBytes });
+  const records = Array.from({ length: 300 }, (_, n) => createHash("sha256").update(String(n)).digest("hex")).join("");
+  const capture = new PiObservation({ sessionId: metadata.id, write, onError: e => f.errors.push(e) });
+  const result = await capture.stream(provider())(model, { messages: [] }, { onPayload: () => ({ records }) });
+  assert.equal((await result.result()).stopReason, "stop");
+  assert.ok(statSync(f.path).size <= maxBytes);
+  assert.equal(f.errors.length, 1);
+  const before = statSync(f.path).size;
+  const limited = readObservation(f.path, metadata.id);
+  assert.ok(limited.issues.some(issue => issue.includes("capacity reached")));
+  assert.equal((limited.nodes[0] as ModelCall).request, undefined);
+  assert.ok(sessionView(metadata, [], limited).issues!.some(issue => issue.includes("provider payload not observed")));
+  const resumed = new PiObservation({ sessionId: metadata.id, write: observationWriter(f.path, { maxBytes }), onError: e => f.errors.push(e) });
+  await (await resumed.stream(provider())(model, { messages: [] })).result();
+  assert.equal(statSync(f.path).size, before);
+  assert.equal(f.errors.length, 2);
+});
+
+test("missing native entries keep supplemental metadata without fabricating message bodies", async t => {
+  const f = fixture(t), capture = f.create();
+  const stream = await capture.stream(provider())(model, { messages: [] });
+  const response = await stream.result();
+  capture.link(capture.modelCallId(response)!, "removed-entry");
+  const view = sessionView(metadata, [], readObservation(f.path, metadata.id));
+  assert.equal((view.nodes[0] as ModelCall).response, undefined);
+  assert.equal(view.nodes[0]!.status, "completed");
+  assert.ok(view.issues!.some(issue => issue.includes("native result not linked or unavailable")));
+});
+
+
+test("tool argument transformations are supplementary evidence; unchanged proposals need no copy", async t => {
+  const f = fixture(t), capture = f.create();
+  const native = new InMemorySessionStorage({ metadata });
+  const session = new Session(capture.storage(native));
+  const final = await (await capture.stream(provider(true))(model, { messages: [] })).result();
+  await session.appendMessage(final);
+  capture.event({ type: "tool_execution_start", toolCallId: "lookup", toolName: "lookup", args: { key: "x", limit: 10 } });
+  capture.event({ type: "tool_execution_end", toolCallId: "lookup", toolName: "lookup", result: { content: [] }, isError: false });
+  await session.appendMessage({ role: "toolResult", toolCallId: "lookup", toolName: "lookup", content: [], isError: false, timestamp: 0 });
+  const view = await readSessionView(native, readObservation(f.path, metadata.id));
+  const tool = view.nodes.find(n => n.kind === "tool_call") as ToolCall;
+  assert.deepEqual(tool.request!.input, { key: "x", limit: 10 });
+  assert.ok(tool.response);
 });

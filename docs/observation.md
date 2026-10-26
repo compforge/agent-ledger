@@ -319,17 +319,24 @@ gaps, and never resumes an Agent or automatically fetches external evidence. Nod
 cases cover every concrete type, explicit null, ownership, overlapping roots, independent copies and
 links between equal local IDs in different Sessions.
 
-## Pi runtime capture
+## Harness-owned evidence and Pi supplements
 
-The Pi adapter can combine native Session entries with a per-Session observation journal.
-`PiObservation` wraps the provider stream, observes native tool execution events and links
-successful native appends. It captures request payloads after the supplied payload transformation,
-with the boundary explicitly identified as `provider.onPayload.return`; stream context alone does
-not establish a model request. Captured calls keep stable IDs before and after completion and
-native entry IDs remain evidence. Input delivery modes require caller-confirmed applied entries.
+A Harness normally owns its Session record. Adapters first project that record and supplement only
+missing observation facts. The resulting SessionView / JobView is an on-demand read projection;
+persisting another complete execution history is not required. Exported sharing snapshots can be
+self-contained, while runtime observation retains references to native evidence.
 
-This journal is telemetry, not a Ledger Store or a recovery checkpoint. The caller owns file
-location, writer exclusivity and retention. Readers preserve complete prefixes, expose missing
-outcomes and combine ordered segments without resuming execution. Native compaction and branch
-entries remain visible. See the [Pi integration](../typescript/packages/pi/README.md#capture-model-and-tool-execution)
-for wiring, file behavior and evidence limitations.
+The Pi adapter supplements native entries with provider payloads, start/end metadata, small error
+diagnostics, explicit call-to-entry links and applied input modes. It records the payload after the
+supplied transformation at `provider.onPayload.return`. It does not duplicate stream context,
+input bodies, responses, usage or tool result bodies. Unchanged tool arguments also use native
+proposals; transformed execution arguments are supplemental evidence. Native bodies are resolved
+when a view is read. Missing native records remain evidence gaps, including a response lost before
+native persistence; supplemental records do not become a recovery log.
+
+Pi supplemental files use individually compressed records and a configurable per-file disk budget
+(default 16 MiB). Reaching the budget records a gap and stops capture without disrupting execution.
+The caller controls total retention across files and Sessions. Readers preserve complete prefixes
+and combine explicitly selected segments; native persistence and recovery remain with the Harness.
+See the [Pi integration](../typescript/packages/pi/README.md#supplement-native-session-evidence)
+for request boundaries, identity links, storage budgets and sharing.

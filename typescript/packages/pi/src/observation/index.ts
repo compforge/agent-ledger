@@ -5,7 +5,7 @@ import type { JsonValue } from "@compforge/agent-common";
 import { validate, type SessionView, type Node, type ModelCall, type ToolCall, type Input, type Operation } from "@compforge/agent-observation";
 
 export { PiObservation, type PiObservationOptions, type PiObservationRecord } from "./capture.js";
-export { observationWriter, readObservation, type PiObservationSnapshot } from "./journal.js";
+export { DEFAULT_OBSERVATION_MAX_BYTES, observationWriter, readObservation, type PiObservationSnapshot } from "./journal.js";
 export { mergeObservation } from "./merge.js";
 
 /**

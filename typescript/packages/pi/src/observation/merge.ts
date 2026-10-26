@@ -1,4 +1,4 @@
-import { inspect, type ModelCall, type Node, type SessionView, type ToolCall } from "@compforge/agent-observation";
+import { inspect, type Input, type ModelCall, type Node, type SessionView, type ToolCall } from "@compforge/agent-observation";
 import type { PiObservationSnapshot } from "./journal.js";
 
 /** Enrich native observations only through explicit entry links. Never join by timestamps or tool names. */
@@ -10,11 +10,10 @@ export function mergeObservation(native: SessionView, snapshot: PiObservationSna
   const nativeById = new Map(result.nodes.map(node => [node.id, node]));
   const byEntry = new Map<string, string>();
   const byNode = new Map<string, string>();
-  // Applied user inputs already have their native identity; adding delivery mode never renames them.
-  for (const node of captured.values()) {
-    if (node.kind === "input" && nativeById.get(node.id)?.kind === "input") {
-      byEntry.set(node.id, node.id); byNode.set(node.id, node.id);
-    }
+  for (const { entryId, mode } of snapshot.inputs) {
+    const input = nativeById.get(entryId);
+    if (input?.kind !== "input") { result.issues.push(`input ${entryId}: native entry not observed`); continue; }
+    (input as Input).mode = mode;
   }
   for (const { nodeId, entryId } of snapshot.links) {
     const node = captured.get(nodeId), entry = nativeById.get(entryId);
@@ -33,6 +32,12 @@ export function mergeObservation(native: SessionView, snapshot: PiObservationSna
     // Native persistence can establish an outcome even when the observation terminal write was lost.
     const merged: Node = { ...entry, ...node, evidence: [...(entry.evidence ?? []), { source: "pi.observation", id }],
       attributes: { ...entry.attributes, ...node.attributes, native_entry_id: entry.id } };
+    // Native bodies and final outcomes are authoritative. Supplementary errors only survive without them.
+    if (entry.kind === "model_call" || entry.kind === "tool_call") {
+      const original = entry as ModelCall | ToolCall;
+      if (original.response) (merged as ModelCall | ToolCall).response = original.response;
+      if (entry.status) merged.status = entry.status;
+    }
     if (!node.finished_at && entry.finished_at) {
       merged.status = entry.status!;
       result.issues = result.issues!.filter(issue => issue !== `node ${id}: completion not observed`);
@@ -45,6 +50,9 @@ export function mergeObservation(native: SessionView, snapshot: PiObservationSna
   if (captured.size) {
     result.issues.push("Unlinked observation nodes follow native entries in capture order; their array position does not establish cross-source chronology");
     result.nodes.push(...captured.values());
+    for (const node of captured.values()) {
+      if (node.kind === "model_call" || node.kind === "tool_call") result.issues.push(`node ${node.id}: native result not linked or unavailable; body not copied into observation`);
+    }
   }
   for (const node of result.nodes) {
     if (node.kind === "tool_call") {
