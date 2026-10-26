@@ -1,13 +1,20 @@
+import { mergeObservation } from "./merge.js";
+import type { PiObservationSnapshot } from "./journal.js";
 import type { SessionMetadata, SessionTreeEntry, SessionStorage } from "@earendil-works/pi-agent-core";
 import type { JsonValue } from "@compforge/agent-common";
 import { validate, type SessionView, type Node, type ModelCall, type ToolCall, type Input, type Operation } from "@compforge/agent-observation";
 
+export { PiObservation, type PiObservationOptions, type PiObservationRecord } from "./capture.js";
+export { observationWriter, readObservation, type PiObservationSnapshot } from "./journal.js";
+export { mergeObservation } from "./merge.js";
+
 /**
  * @spec Read Pi's append-ordered session evidence without constructing model requests or executing tools.
- * @spec Tool proposals become observed calls only when an actual result exists; matching follows native ancestry.
+ * @spec Native tool proposals become calls only with a result; supplemental runtime starts can establish pending calls.
+ * @spec Native result matching follows ancestry; runtime linkage requires explicit entry associations.
  * @see docs/observation.md
  */
-export function sessionView(metadata: SessionMetadata, entries: readonly SessionTreeEntry[]): SessionView {
+export function sessionView(metadata: SessionMetadata, entries: readonly SessionTreeEntry[], observation?: PiObservationSnapshot): SessionView {
   const result: SessionView = {schema_version: "agent-ledger/session@1", session: {source: "pi", id: metadata.id}, nodes: [], attributes: {metadata: json(metadata)}, issues: []};
   const byId = new Map<string, SessionTreeEntry>();
   const models = new Map<string, ModelCall>();
@@ -62,12 +69,12 @@ export function sessionView(metadata: SessionMetadata, entries: readonly Session
     byId.set(entry.id, entry);
   }
   validate(result);
-  return structuredClone(result);
+  return observation ? mergeObservation(result, observation) : structuredClone(result);
 }
 
 /** Read-only convenience for native or Ledger-backed Pi SessionStorage. */
-export async function readSessionView(storage: SessionStorage): Promise<SessionView> {
-  return sessionView(await storage.getMetadata(), await storage.getEntries());
+export async function readSessionView(storage: SessionStorage, observation?: PiObservationSnapshot): Promise<SessionView> {
+  return sessionView(await storage.getMetadata(), await storage.getEntries(), observation);
 }
 
 function json(value: unknown): JsonValue {

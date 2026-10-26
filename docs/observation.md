@@ -318,3 +318,18 @@ and intentional silence. Rendering accepts either root, displays Session provena
 gaps, and never resumes an Agent or automatically fetches external evidence. Node roundtrip and selection
 cases cover every concrete type, explicit null, ownership, overlapping roots, independent copies and
 links between equal local IDs in different Sessions.
+
+## Pi runtime capture
+
+The Pi adapter can combine native Session entries with a per-Session observation journal.
+`PiObservation` wraps the provider stream, observes native tool execution events and links
+successful native appends. It captures request payloads after the supplied payload transformation,
+with the boundary explicitly identified as `provider.onPayload.return`; stream context alone does
+not establish a model request. Captured calls keep stable IDs before and after completion and
+native entry IDs remain evidence. Input delivery modes require caller-confirmed applied entries.
+
+This journal is telemetry, not a Ledger Store or a recovery checkpoint. The caller owns file
+location, writer exclusivity and retention. Readers preserve complete prefixes, expose missing
+outcomes and combine ordered segments without resuming execution. Native compaction and branch
+entries remain visible. See the [Pi integration](../typescript/packages/pi/README.md#capture-model-and-tool-execution)
+for wiring, file behavior and evidence limitations.
