@@ -318,3 +318,25 @@ and intentional silence. Rendering accepts either root, displays Session provena
 gaps, and never resumes an Agent or automatically fetches external evidence. Node roundtrip and selection
 cases cover every concrete type, explicit null, ownership, overlapping roots, independent copies and
 links between equal local IDs in different Sessions.
+
+## Harness-owned evidence and Pi supplements
+
+A Harness normally owns its Session record. Adapters first project that record and supplement only
+missing observation facts. The resulting SessionView / JobView is an on-demand read projection;
+persisting another complete execution history is not required. Exported sharing snapshots can be
+self-contained, while runtime observation retains references to native evidence.
+
+The Pi adapter supplements native entries with provider payloads, start/end metadata, small error
+diagnostics, explicit call-to-entry links and applied input modes. It records the payload after the
+supplied transformation at `provider.onPayload.return`. It does not duplicate stream context,
+input bodies, responses, usage or tool result bodies. Unchanged tool arguments also use native
+proposals; transformed execution arguments are supplemental evidence. Native bodies are resolved
+when a view is read. Missing native records remain evidence gaps, including a response lost before
+native persistence; supplemental records do not become a recovery log.
+
+Pi supplemental files use individually compressed records and a configurable per-file disk budget
+(default 16 MiB). Reaching the budget records a gap and stops capture without disrupting execution.
+The caller controls total retention across files and Sessions. Readers preserve complete prefixes
+and combine explicitly selected segments; native persistence and recovery remain with the Harness.
+See the [Pi integration](../typescript/packages/pi/README.md#supplement-native-session-evidence)
+for request boundaries, identity links, storage budgets and sharing.

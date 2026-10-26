@@ -21,7 +21,8 @@
     "@earendil-works/pi-agent-core": ">=0.80 <1"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "0.80.6"
+    "@earendil-works/pi-agent-core": "0.80.6",
+    "@earendil-works/pi-ai": "0.80.10"
   },
   "license": "MIT",
   "repository": {
