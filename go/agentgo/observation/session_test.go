@@ -104,3 +104,76 @@ func TestNativeMessagesAndUsage(t *testing.T) {
 		t.Fatal("orphan completion synthesized a start")
 	}
 }
+
+// +case=`Middleware can complete a tool without invoking its function; ToolCall follows the complete execution boundary and retains its disposition`
+func TestToolExecutionIncludesShortCircuitAndInvocation(t *testing.T) {
+	execution := &agentgo.Execution{ID: "tool", Kind: agentgo.ExecutionKindTool, Attempt: 1}
+	event := func(kind agentgo.EventType, data string) session.Record {
+		return session.Record{Type: string(kind), RunID: "run", Execution: execution, Data: json.RawMessage(data)}
+	}
+	start := session.Record{Type: session.SessionStart, Data: json.RawMessage(`{"version":1}`)}
+	for _, tc := range []struct {
+		name         string
+		records      []session.Record
+		args, result string
+		evidence     int
+	}{
+		{"middleware", []session.Record{
+			event(agentgo.EventToolExecStart, `{"tool":"submit","tool_id":"t","args":{"input":1}}`),
+			event(agentgo.EventToolExecEnd, `{"tool":"submit","tool_id":"t","disposition":"short_circuited","tool_result":{"content":"accepted"}}`),
+		}, `{"input":1}`, "accepted", 2},
+		{"invocation", []session.Record{
+			event(agentgo.EventToolExecStart, `{"tool":"submit","tool_id":"t","args":{"input":1}}`),
+			event(agentgo.EventToolInvokeStart, `{"tool":"submit","tool_id":"t","args":{"input":2}}`),
+			event(agentgo.EventToolInvokeEnd, `{"tool":"submit","tool_id":"t","tool_result":{"content":"inner"}}`),
+			event(agentgo.EventToolExecEnd, `{"tool":"submit","tool_id":"t","disposition":"executed","tool_result":{"content":"outer"}}`),
+		}, `{"input":2}`, "outer", 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			observed, err := ReadSessionView(bytes.NewReader(recording(t, append([]session.Record{start}, tc.records...)...)), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(observed.Nodes) != 2 {
+				t.Fatalf("duplicated tool: %d", len(observed.Nodes))
+			}
+			call, ok := observed.Nodes[1].(*view.ToolCall)
+			if !ok || call.Status != "completed" || string(call.Request.Input) != tc.args || !strings.Contains(string(call.Response.Output), tc.result) || len(call.Evidence) != tc.evidence {
+				t.Fatalf("call=%+v", call)
+			}
+			if call.Attributes["disposition"] == nil || len(observed.Issues) > 0 {
+				t.Fatalf("missing disposition or false gap: %+v", observed)
+			}
+		})
+	}
+	// Invocation success alone does not finalize the outer tool pipeline.
+	raw := recording(t, start, event(agentgo.EventToolExecStart, `{"tool":"submit","args":{}}`), event(agentgo.EventToolInvokeEnd, `{"tool_result":{"content":"inner"}}`))
+	partial, err := ReadSessionView(bytes.NewReader(raw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := partial.Nodes[1].(*view.ToolCall)
+	if tool.Response != nil || tool.FinishedAt != "" || len(partial.Issues) == 0 {
+		t.Fatal("inner invocation finalized unfinished execution")
+	}
+}
+
+// +case=`A malformed record after a valid Session prefix preserves native ownership and allows already observed calls to be selected into a Job`
+func TestCorruptSuffixPreservesSelectablePrefix(t *testing.T) {
+	execution := &agentgo.Execution{ID: "model", Kind: agentgo.ExecutionKindModel, Attempt: 1}
+	raw := recording(t, session.Record{Type: session.SessionStart, Data: json.RawMessage(`{"version":1}`)},
+		session.Record{Type: string(agentgo.EventModelExecStart), RunID: "r", Execution: execution}) // lifecycle Data may be absent
+	raw = append(raw, []byte("{broken}\n")...)
+	observed, err := ReadSessionView(bytes.NewReader(raw), nil)
+	if err == nil || observed.Session.ID != "session" || observed.Session.Source != "agentgo" || len(observed.Issues) == 0 {
+		t.Fatalf("prefix=%+v error=%v", observed, err)
+	}
+	call := observed.Nodes[1].(*view.ModelCall)
+	selected, err := view.SelectNodes(observed, []string{call.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 1 || selected[0].Base().Session.ID != "session" || call.Response != nil {
+		t.Fatal("lost incomplete call or Session ownership")
+	}
+}
