@@ -7,7 +7,7 @@ from typing import Any
 from agent_ledger.common import CallRequest, CallResponse, SessionRef, call_details
 from agent_ledger.models import SessionView as LedgerSessionView
 from agent_ledger.models import StoredEvent
-from agent_ledger.observation.models import (
+from agent_ledger.observation import (
     Lane,
     ModelCall,
     Node,
@@ -29,7 +29,7 @@ _TERMINALS: dict[str, Status] = {
 
 def session_view(source: LedgerSessionView) -> SessionView:
     """Preserve each physical call, Lane order and missing/conflicting outcomes."""
-    document = SessionView(session=SessionRef(source="ledger", id=source.session_id), items=[])
+    document = SessionView(session=SessionRef(source="ledger", id=source.session_id), nodes=[])
     issues: list[str] = []
     turns: dict[str, Turn] = {}
     calls: dict[str, ModelCall | ToolCall | Operation] = {}
@@ -66,7 +66,7 @@ def session_view(source: LedgerSessionView) -> SessionView:
                 run_id=next(lane.run_id for lane in source.lanes if lane.id == row.lane_id),
             )
             turns[turn_id] = turn
-            document.items.append(turn)
+            document.nodes.append(turn)
         return turns[turn_id]
 
     known_lanes = {lane.id for lane in source.lanes}
@@ -107,7 +107,7 @@ def session_view(source: LedgerSessionView) -> SessionView:
                     else:
                         call = Operation(**facts, operation=action.type)
                     calls[attempt.id] = call
-                    turn_for(action.turn_id).items.append(call)
+                    turn_for(action.turn_id).nodes.append(call)
                 observe(call, event)
                 if isinstance(call, (ModelCall, ToolCall)):
                     if event.event_type == "attempt.requested":
@@ -126,7 +126,7 @@ def session_view(source: LedgerSessionView) -> SessionView:
                     if extra:
                         call.attributes.setdefault("event_details", {})[event.id] = extra
                 else:
-                    call.items.append(
+                    call.nodes.append(
                         Operation(
                             id=f"event:{event.id}",
                             operation=event.event_type,
@@ -146,9 +146,9 @@ def session_view(source: LedgerSessionView) -> SessionView:
                 attributes={"extensions": event.extensions},
             )
             if event.event_type.startswith("turn.") and event.subject_id in turn_rows:
-                turn_for(event.subject_id).items.append(op)
+                turn_for(event.subject_id).nodes.append(op)
             else:
-                document.items.append(op)
+                document.nodes.append(op)
     for row in source.turns:
         turn_for(row.id)
     for attempt in source.attempts:

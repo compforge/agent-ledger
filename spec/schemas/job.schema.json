@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/job.schema.json",
+  "title": "JobView",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "job",
+    "nodes"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "agent-ledger/job@1"
+    },
+    "job": {
+      "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/observation.schema.json#/$defs/job"
+    },
+    "name": {
+      "type": "string"
+    },
+    "goal": {},
+    "result": {},
+    "status": {
+      "enum": [
+        "unknown",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "outcome_unknown"
+      ]
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/observation.schema.json#/$defs/relation"
+      }
+    },
+    "attributes": {
+      "type": "object"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/observation.schema.json#/$defs/node"
+      }
+    }
+  },
+  "additionalProperties": false
+}

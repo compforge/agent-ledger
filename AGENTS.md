@@ -26,12 +26,12 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 ├── typescript/
 │   └── packages/
 │       ├── common/               # 共享调用事实；无存储或渲染依赖
-│       ├── observation/          # Session 可观测；当前提供 SessionView、校验与渲染
+│       ├── observation/          # SessionView / JobView，校验与渲染
 │       ├── core/                 # TypeScript Core 与 Memory Store
 │       └── pi/                   # ledger / observation 两个独立入口
 └── go/                           # Go Core 与公共 LaneRecorder
     ├── common/                  # 共享模型身份、请求/响应、Usage 与 Error
-    ├── observation/             # SessionView，无 Store 依赖
+    ├── observation/             # SessionView / JobView，无 Store 依赖
     ├── ledger/observation/       # Ledger 内可选观察入口
     ├── agentgo/                 # ledger / observation 按接入库组织
     └── stores/
@@ -65,8 +65,10 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
     只汇总终态事实、Checkpoint link 和未决 Attempt，不选择控制状态或恢复策略。
 
 11. `common` 表达真正共享的身份与调用事实；Ledger 侧重 Session 的可恢复性，`observation`
-    侧重 Session 的可观测性，`SessionView` 是其当前主要能力。一个 SessionView 只表达一个 Agent
-    Session；跨 Session 业务流程留给后续 Timeline。followup/resume 不自动新建 Session。
+    提供 SessionView 和 JobView 两种可评估的观察视角，共用 Node 模型。一个 SessionView 只表达一个
+    Agent Session；JobView 围绕任务组织多个 Session 的相关执行片段。followup/resume 不自动新建 Session。
+    Node 承载公共事实，具体类型扩展它；包内按 node、session、job、inspect 和 render 组织。
+    业务侧决定 Job 归属，selectNodes 只负责安全选取；inspect 不推断执行或业务成功。
 12. 同名但职责不同的类型可以留在各包，例如 Ledger 查询用的 SessionView 与 observation.SessionView；
     同时使用时 alias，只有语义与契约一致的类型才进入 common。
 13. Pi、AgentGo 的适配各归一个库目录，分别提供 ledger 与 observation 入口。原生 Session 可直接
@@ -97,7 +99,7 @@ Harness Adapter。它记录不可变执行事实和 Harness 原生恢复基线�
 - `spec/schemas/event.schema.json` — Event envelope
 - `spec/schemas/artifact.schema.json` — Artifact identity and immutable version metadata
 - `spec/schemas/common.schema.json` — Ledger/Observation 共享调用事实
-- `spec/schemas/session-view.schema.json` — 执行读模型与跨语言展示契约
+- `spec/schemas/session.schema.json` — 执行读模型与跨语言展示契约
 - `spec/schemas/call-payload.schema.json` — Core model/tool Attempt payload profiles
 - `spec/schemas/checkpoint.schema.json` — Checkpoint envelope
 - `spec/schemas/mysql.sql` — 无外键的参考关系型 Schema

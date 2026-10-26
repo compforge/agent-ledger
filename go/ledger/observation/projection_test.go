@@ -34,12 +34,15 @@ func TestProjectViewKeepsRetriesAndParallelLanes(t *testing.T) {
 		t.Fatal(err)
 	}
 	ids, statuses := []string{}, []string{}
-	var calls []view.Item
+	var calls []interface {
+		Kind() string
+		Base() *view.Node
+	}
 	lanes := map[string]bool{}
-	for _, item := range document.Items {
+	for _, item := range document.Nodes {
 		if turn, ok := item.(*view.Turn); ok {
 			lanes[turn.LaneID] = true
-			for _, call := range turn.Items {
+			for _, call := range turn.Nodes {
 				if call.Kind() == "model_call" || call.Kind() == "tool_call" {
 					calls = append(calls, call)
 					ids = append(ids, call.Base().ID)
@@ -115,9 +118,9 @@ func TestTypedFailureRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	var call *view.ModelCall
-	for _, node := range document.Items {
+	for _, node := range document.Nodes {
 		if turn, ok := node.(*view.Turn); ok {
-			for _, item := range turn.Items {
+			for _, item := range turn.Nodes {
 				if model, ok := item.(*view.ModelCall); ok {
 					call = model
 				}
@@ -140,7 +143,10 @@ func TestTypedFailureRoundTrip(t *testing.T) {
 		t.Fatal("source details missing")
 	}
 	for _, value := range details {
-		if !reflect.DeepEqual(value, vector["details"]) {
+		// Compare JSON facts, independently of a decoder's Go number representation.
+		actual, actualErr := json.Marshal(value)
+		expected, expectedErr := json.Marshal(vector["details"])
+		if actualErr != nil || expectedErr != nil || string(actual) != string(expected) {
 			t.Fatalf("details changed: %#v", value)
 		}
 	}

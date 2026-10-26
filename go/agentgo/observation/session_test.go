@@ -38,7 +38,7 @@ func TestSessionAcrossRunsAndIncompleteEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := prefix.Items[1].(*view.ModelCall)
+	first := prefix.Nodes[1].(*view.ModelCall)
 	if first.Response != nil || first.Status == "completed" {
 		t.Fatal("EOF manufactured a completion")
 	}
@@ -52,7 +52,7 @@ func TestSessionAcrossRunsAndIncompleteEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, b := full.Items[1].(*view.ModelCall), full.Items[2].(*view.ModelCall)
+	a, b := full.Nodes[1].(*view.ModelCall), full.Nodes[2].(*view.ModelCall)
 	if a.ID != first.ID || a.ID == b.ID || a.Status != "failed" || b.Status != "completed" {
 		t.Fatalf("bad call identities/outcomes: %#v %#v", a, b)
 	}
@@ -93,10 +93,10 @@ func TestNativeMessagesAndUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if observed.Items[1].Kind() != "input" {
+	if observed.Nodes[1].Kind() != "input" {
 		t.Fatal("user input not represented")
 	}
-	model := observed.Items[2].(*view.ModelCall)
+	model := observed.Nodes[2].(*view.ModelCall)
 	if model.Response.Usage == nil || *model.Response.Usage.InputTokens != 0 {
 		t.Fatal("zero usage not preserved")
 	}

@@ -1,6 +1,6 @@
 import type { SessionMetadata, SessionTreeEntry, SessionStorage } from "@earendil-works/pi-agent-core";
 import type { JsonValue } from "@compforge/agent-common";
-import { validate, type SessionView, type Node, type ModelCall, type ToolCall } from "@compforge/agent-observation";
+import { validate, type SessionView, type Node, type ModelCall, type ToolCall, type Input, type Operation } from "@compforge/agent-observation";
 
 /**
  * @spec Read Pi's append-ordered session evidence without constructing model requests or executing tools.
@@ -8,19 +8,19 @@ import { validate, type SessionView, type Node, type ModelCall, type ToolCall } 
  * @see docs/observation.md
  */
 export function sessionView(metadata: SessionMetadata, entries: readonly SessionTreeEntry[]): SessionView {
-  const result: SessionView = {schema_version: "agent-ledger/session-view@1", session: {source: "pi", id: metadata.id}, items: [], attributes: {metadata: json(metadata)}, issues: []};
+  const result: SessionView = {schema_version: "agent-ledger/session@1", session: {source: "pi", id: metadata.id}, nodes: [], attributes: {metadata: json(metadata)}, issues: []};
   const byId = new Map<string, SessionTreeEntry>();
   const models = new Map<string, ModelCall>();
   for (const entry of entries) {
     if (byId.has(entry.id)) throw new Error(`Pi session ${metadata.id}: duplicate entry ${entry.id}`);
     if (entry.parentId !== null && !byId.has(entry.parentId)) result.issues!.push(`entry ${entry.id}: parent ${entry.parentId} not observed`);
-    const base: Node = {id: entry.id, evidence: [{source: "pi", id: entry.id}], attributes: {parent_id: entry.parentId, entry_type: entry.type}};
+    const base: Omit<Node, "kind"> = {id: entry.id, evidence: [{source: "pi", id: entry.id}], attributes: {parent_id: entry.parentId, entry_type: entry.type}};
     if (entry.type !== "message") {
-      result.items.push({...base, kind: "operation", operation: `pi.${entry.type}`, data: json(entry), started_at: entry.timestamp});
+      result.nodes.push({...base, kind: "operation", operation: `pi.${entry.type}`, data: json(entry), started_at: entry.timestamp} as Operation);
     } else {
       const message = entry.message;
       if (message.role === "user") {
-        result.items.push({...base, kind: "input", content: json(message), started_at: entry.timestamp});
+        result.nodes.push({...base, kind: "input", content: json(message), started_at: entry.timestamp} as Input);
       } else if (message.role === "assistant") {
         const model: ModelCall = {...base, kind: "model_call", finished_at: entry.timestamp,
           status: message.stopReason === "error" ? "failed" : message.stopReason === "aborted" ? "cancelled" : "completed",
@@ -33,7 +33,7 @@ export function sessionView(metadata: SessionMetadata, entries: readonly Session
         if (message.responseModel) model.response!.model = {id: message.responseModel, provider: message.provider};
         if (message.responseId) model.response!.provider_request_id = message.responseId;
         if (message.errorMessage) model.response!.error = {type: message.stopReason, message: message.errorMessage};
-        result.items.push(model); models.set(entry.id, model);
+        result.nodes.push(model); models.set(entry.id, model);
         result.issues!.push(`node ${entry.id}: exact model request not recorded in Pi session`);
       } else if (message.role === "toolResult") {
         const tool: ToolCall = {...base, kind: "tool_call", tool_call_id: message.toolCallId,
@@ -54,9 +54,9 @@ export function sessionView(metadata: SessionMetadata, entries: readonly Session
         }
         if (!tool.request) result.issues!.push(`node ${entry.id}: tool request not observed`);
         tool.name = message.toolName;
-        result.items.push(tool);
+        result.nodes.push(tool);
       } else {
-        result.items.push({...base, kind: "operation", operation: `pi.message.${message.role}`, data: json(message), started_at: entry.timestamp});
+        result.nodes.push({...base, kind: "operation", operation: `pi.message.${message.role}`, data: json(message), started_at: entry.timestamp} as Operation);
       }
     }
     byId.set(entry.id, entry);

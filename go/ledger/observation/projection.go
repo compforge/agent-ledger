@@ -18,12 +18,15 @@ var viewTerminals = map[string]string{"completed": "completed", "failed": "faile
 // +spec=`Each physical call survives projection; missing results and recorded unknown outcomes differ`
 // +link=docs/observation.md
 func SessionView(source agentledger.SessionView) (view.SessionView, error) {
-	document := view.SessionView{SchemaVersion: view.SchemaVersion, Session: common.SessionRef{Source: "ledger", ID: source.SessionID}, Items: view.Items{}}
+	document := view.SessionView{SchemaVersion: view.SessionSchemaVersion, Session: common.SessionRef{Source: "ledger", ID: source.SessionID}, Nodes: view.Nodes{}}
 	actions := map[string]agentledger.Action{}
 	attempts := map[string]agentledger.Attempt{}
 	rows := map[string]agentledger.Turn{}
 	turns := map[string]*view.Turn{}
-	calls := map[string]view.Item{}
+	calls := map[string]interface {
+		Kind() string
+		Base() *view.Node
+	}{}
 	terminals := map[string][]agentledger.StoredEvent{}
 	callOrder := []string{}
 	for _, x := range source.Actions {
@@ -72,7 +75,7 @@ func SessionView(source agentledger.SessionView) (view.SessionView, error) {
 			return turn
 		}
 		row := rows[id]
-		turn := &view.Turn{Node: view.Node{ID: "turn:" + id, LaneID: row.LaneID}, Items: view.Items{}}
+		turn := &view.Turn{Node: view.Node{ID: "turn:" + id, LaneID: row.LaneID}, Nodes: view.Nodes{}}
 		for _, lane := range source.Lanes {
 			if lane.ID == row.LaneID {
 				turn.RunID = lane.RunID
@@ -80,7 +83,7 @@ func SessionView(source agentledger.SessionView) (view.SessionView, error) {
 			}
 		}
 		turns[id] = turn
-		document.Items = append(document.Items, turn)
+		document.Nodes = append(document.Nodes, turn)
 		return turn
 	}
 	laneIDs := map[string]bool{}
@@ -127,12 +130,12 @@ func SessionView(source agentledger.SessionView) (view.SessionView, error) {
 					case "tool_call":
 						call = &view.ToolCall{Node: base, ToolCallID: action.Key}
 					default:
-						call = &view.Operation{Node: base, Operation: action.Type, Items: view.Items{}}
+						call = &view.Operation{Node: base, Operation: action.Type, Nodes: view.Nodes{}}
 					}
 					calls[attempt.ID] = call
 					callOrder = append(callOrder, attempt.ID)
 					turn := turnFor(action.TurnID)
-					turn.Items = append(turn.Items, call)
+					turn.Nodes = append(turn.Nodes, call)
 				}
 				observe(call.Base(), event)
 				var request **common.CallRequest
@@ -145,7 +148,7 @@ func SessionView(source agentledger.SessionView) (view.SessionView, error) {
 					request = &value.Request
 					response = &value.Response
 				case *view.Operation:
-					value.Items = append(value.Items, &view.Operation{Node: view.Node{ID: "event:" + event.ID, Evidence: []view.SourceRef{{Source: "ledger", ID: event.ID}}}, Operation: event.EventType, Data: event.Payload})
+					value.Nodes = append(value.Nodes, &view.Operation{Node: view.Node{ID: "event:" + event.ID, Evidence: []view.SourceRef{{Source: "ledger", ID: event.ID}}}, Operation: event.EventType, Data: event.Payload})
 				}
 				if request != nil {
 					suffix := event.EventType[strings.LastIndex(event.EventType, ".")+1:]
@@ -184,9 +187,9 @@ func SessionView(source agentledger.SessionView) (view.SessionView, error) {
 			op := &view.Operation{Node: view.Node{ID: "event:" + event.ID, LaneID: lane.ID, RunID: lane.RunID, StartedAt: event.OccurredAt, Evidence: []view.SourceRef{{Source: "ledger", ID: event.ID}}, Attributes: map[string]any{"extensions": event.Extensions}}, Operation: event.EventType, Data: event.Payload}
 			if strings.HasPrefix(event.EventType, "turn.") && hasTurn {
 				turn := turnFor(event.SubjectID)
-				turn.Items = append(turn.Items, op)
+				turn.Nodes = append(turn.Nodes, op)
 			} else {
-				document.Items = append(document.Items, op)
+				document.Nodes = append(document.Nodes, op)
 			}
 		}
 	}

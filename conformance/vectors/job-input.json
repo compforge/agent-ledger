@@ -1,0 +1,97 @@
+{
+  "schema_version": "agent-ledger/job@1",
+  "job": {
+    "source": "assistant",
+    "id": "input-a"
+  },
+  "goal": "Assess whether this input needs attention",
+  "result": {
+    "decision": "silent"
+  },
+  "status": "completed",
+  "relations": [
+    {
+      "kind": "handoff",
+      "source": {
+        "id": "route"
+      },
+      "target": {
+        "id": "assess"
+      }
+    }
+  ],
+  "issues": [
+    "Only observations explicitly associated with this input are included."
+  ],
+  "nodes": [
+    {
+      "kind": "input",
+      "id": "input",
+      "content": "Workload restarted"
+    },
+    {
+      "kind": "operation",
+      "id": "route",
+      "operation": "route.rule",
+      "data": {
+        "topic": "topic-a"
+      }
+    },
+    {
+      "kind": "operation",
+      "id": "assess",
+      "operation": "input.assess",
+      "nodes": [
+        {
+          "kind": "model_call",
+          "id": "m1",
+          "session": {
+            "source": "pi",
+            "id": "chief-topic-a"
+          },
+          "request": {
+            "input": {
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "Check the proposed change"
+                }
+              ]
+            }
+          },
+          "response": {
+            "output": "candidate",
+            "usage": {
+              "input_tokens": 8,
+              "output_tokens": 0
+            }
+          },
+          "started_at": "2026-10-26T00:00:00Z",
+          "finished_at": "2026-10-26T00:00:02Z",
+          "status": "completed"
+        },
+        {
+          "kind": "tool_call",
+          "id": "complete",
+          "session": {
+            "source": "pi",
+            "id": "chief-topic-a"
+          },
+          "model_call_id": "earlier-model",
+          "request": {
+            "tool_name": "complete_inputs",
+            "input": {
+              "ids": [
+                "input-a",
+                "input-b"
+              ]
+            }
+          },
+          "response": {
+            "output": null
+          }
+        }
+      ]
+    }
+  ]
+}

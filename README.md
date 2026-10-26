@@ -173,9 +173,8 @@ See [RFC 0001](spec/rfcs/0001-agent-ledger.md) for the core contract and
 ## Session recoverability and observability
 
 `common` holds shared execution facts. `ledger` supports Session recoverability with durable Events,
-Action/Attempt identity and Checkpoints. `observation` supports Session observability; its current
-main capability, `SessionView`, follows one Session across inputs and loop runs for rendering and
-analysis. It accepts native evidence without a Ledger Store.
+Action/Attempt identity and Checkpoints. `observation` provides two evaluation perspectives: `SessionView` follows one Session across
+inputs and loop runs; `JobView` organizes task work across Sessions using the same call facts. It accepts native evidence without a Ledger Store.
 
 - Python: `agent_ledger.common`, `agent_ledger.observation`, `agent_ledger.ledger.observation`.
 - Go: `common`, `observation`, and the optional `ledger/observation` read-side entrypoint.
@@ -186,4 +185,4 @@ Library-specific adaptation lives together: `@compforge/agent-pi/ledger` and `/o
 inside Ledger, not a separate package. Same-named types with different purposes remain scoped to
 their package; consumers alias them where needed.
 
-See [Session observation](docs/observation.md) for the model, independent entrypoints and rendering.
+See [Agent observation](docs/observation.md) for the model, independent entrypoints and rendering.

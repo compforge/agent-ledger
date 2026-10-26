@@ -1,10 +1,10 @@
 {
-  "schema_version": "agent-ledger/session-view@1",
+  "schema_version": "agent-ledger/session@1",
   "session": {
     "source": "fixture",
     "id": "native-session"
   },
-  "items": [
+  "nodes": [
     {
       "kind": "input",
       "id": "input-1",
@@ -19,7 +19,7 @@
     {
       "kind": "turn",
       "id": "turn-1",
-      "items": [
+      "nodes": [
         {
           "kind": "model_call",
           "id": "m1",

@@ -1,0 +1,173 @@
+{
+  "schema_version": "agent-ledger/job@1",
+  "job": {
+    "source": "review",
+    "id": "unit-a"
+  },
+  "name": "Review Unit A",
+  "goal": {
+    "text": "Find actionable defects"
+  },
+  "status": "completed",
+  "result": {
+    "findings": [
+      "f1"
+    ]
+  },
+  "relations": [
+    {
+      "kind": "handoff",
+      "source": {
+        "id": "discover"
+      },
+      "target": {
+        "id": "verify"
+      }
+    },
+    {
+      "kind": "depends_on",
+      "source": {
+        "id": "hypothesis-a"
+      },
+      "target": {
+        "id": "m1",
+        "session": {
+          "source": "agentgo",
+          "id": "r1"
+        }
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "kind": "input",
+      "id": "input",
+      "content": {
+        "diff": "example"
+      }
+    },
+    {
+      "kind": "operation",
+      "id": "discover",
+      "operation": "review.discover",
+      "nodes": [
+        {
+          "kind": "model_call",
+          "id": "m1",
+          "session": {
+            "source": "agentgo",
+            "id": "r1"
+          },
+          "request": {
+            "input": {
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "Check the proposed change"
+                }
+              ]
+            }
+          },
+          "response": {
+            "output": "candidate",
+            "usage": {
+              "input_tokens": 8,
+              "output_tokens": 0
+            }
+          },
+          "started_at": "2026-10-26T00:00:00Z",
+          "finished_at": "2026-10-26T00:00:02Z",
+          "status": "completed"
+        },
+        {
+          "kind": "tool_call",
+          "id": "t1",
+          "session": {
+            "source": "agentgo",
+            "id": "r1"
+          },
+          "model_call_id": "m1",
+          "request": {
+            "tool_name": "inspect",
+            "input": null
+          },
+          "response": {
+            "output": {
+              "finding": "needs review"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "kind": "operation",
+      "id": "verify",
+      "operation": "review.verify",
+      "nodes": [
+        {
+          "kind": "operation",
+          "id": "hypothesis-a",
+          "operation": "verify.hypothesis",
+          "nodes": [
+            {
+              "kind": "model_call",
+              "id": "m1",
+              "session": {
+                "source": "agentgo",
+                "id": "r2"
+              },
+              "request": {
+                "input": {
+                  "messages": [
+                    {
+                      "role": "user",
+                      "content": "Check the proposed change"
+                    }
+                  ]
+                }
+              },
+              "response": {
+                "output": "candidate",
+                "usage": {
+                  "input_tokens": 8,
+                  "output_tokens": 0
+                }
+              },
+              "started_at": "2026-10-26T00:00:00Z",
+              "finished_at": "2026-10-26T00:00:02Z",
+              "status": "completed"
+            },
+            {
+              "kind": "tool_call",
+              "id": "t1",
+              "session": {
+                "source": "agentgo",
+                "id": "r2"
+              },
+              "model_call_id": "m1",
+              "request": {
+                "tool_name": "inspect",
+                "input": null
+              },
+              "response": {
+                "output": {
+                  "finding": "needs review"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "kind": "operation",
+          "id": "deterministic",
+          "operation": "check.policy",
+          "started_at": "2026-10-26T00:00:01Z",
+          "finished_at": "2026-10-26T00:00:03Z",
+          "data": {
+            "allowed": true
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -7,7 +7,7 @@ import pytest
 from pydantic import Field
 
 from agent_ledger.common import CallRequest, CallResponse, Fact, call_details
-from agent_ledger.observation.models import Input, Operation
+from agent_ledger.observation import Input, Operation
 
 
 def test_common_roundtrip_keeps_null_zero_and_source_details():

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-ledger"
-version = "0.1.0"
+version = "0.2.0"
 description = "A framework-neutral event ledger for durable agent sessions"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -5,7 +5,7 @@ import type { SessionView as LedgerSessionView, StoredEvent } from "./types.js";
 const terminal: Record<string, Status> = { completed: "completed", failed: "failed", cancelled: "cancelled", outcome_unknown: "outcome_unknown" };
 /** Read-only projection. Every physical attempt stays visible; no recovery decisions are made. */
 export function sessionView(source: LedgerSessionView): SessionView {
-  const document: SessionView = {schema_version: "agent-ledger/session-view@1", session: {source: "ledger", id: source.session_id}, items: [], lanes: [], issues: []};
+  const document: SessionView = {schema_version: "agent-ledger/session@1", session: {source: "ledger", id: source.session_id}, nodes: [], lanes: [], issues: []};
   const issue = (message: string) => document.issues!.push(message);
   const actions = new Map(source.actions.map(x => [x.id, x]));
   const attempts = new Map(source.attempts.map(x => [x.id, x]));
@@ -37,8 +37,8 @@ export function sessionView(source: LedgerSessionView): SessionView {
     if (turn === undefined) {
       const row = rows.get(id);
       if (row === undefined) throw new Error(`missing Turn ${id}`);
-      turn = {kind: "turn", id: `turn:${id}`, lane_id: row.lane_id, run_id: source.lanes.find(l => l.id === row.lane_id)!.run_id, items: []};
-      turns.set(id, turn);document.items.push(turn);
+      turn = {kind: "turn", id: `turn:${id}`, lane_id: row.lane_id, run_id: source.lanes.find(l => l.id === row.lane_id)!.run_id, nodes: []};
+      turns.set(id, turn);document.nodes.push(turn);
     }
     return turn;
   }
@@ -59,8 +59,8 @@ export function sessionView(source: LedgerSessionView): SessionView {
           const base = {id: `call:${attempt.id}`, lane_id: lane.id, run_id: lane.run_id, attributes: {action_id: action.id, attempt_id: attempt.id, attempt_no: attempt.attempt_no}};
           if (action.type === "model_call") call = {...base, kind: "model_call"};
           else if (action.type === "tool_call") call = {...base, kind: "tool_call", ...(action.key === undefined ? {} : {tool_call_id: action.key})};
-          else call = {...base, kind: "operation", operation: action.type, items: []};
-          calls.set(attempt.id, call);turnFor(action.turn_id).items.push(call);
+          else call = {...base, kind: "operation", operation: action.type, nodes: []};
+          calls.set(attempt.id, call);turnFor(action.turn_id).nodes.push(call);
         }
         observe(call,event);
         if (call.kind !== "operation") {
@@ -77,12 +77,12 @@ export function sessionView(source: LedgerSessionView): SessionView {
             const details = ((call.attributes ??= {}).event_details ??= {}) as Record<string, JsonValue>;
             details[event.id] = extra;
           }
-        } else call.items!.push({kind:"operation",id:`event:${event.id}`,operation:event.event_type,data:event.payload,evidence:[{source:"ledger",id:event.id}]});
+        } else call.nodes!.push({kind:"operation",id:`event:${event.id}`,operation:event.event_type,data:event.payload,evidence:[{source:"ledger",id:event.id}]} as Operation);
         continue;
       }
       const operation: Operation = {kind:"operation",id:`event:${event.id}`,lane_id:lane.id,operation:event.event_type,started_at:event.occurred_at,data:event.payload,evidence:[{source:"ledger",id:event.id}],attributes:{extensions:event.extensions}};
-      if (event.event_type.startsWith("turn.") && rows.has(event.subject_id)) turnFor(event.subject_id).items.push(operation);
-      else document.items.push(operation);
+      if (event.event_type.startsWith("turn.") && rows.has(event.subject_id)) turnFor(event.subject_id).nodes.push(operation);
+      else document.nodes.push(operation);
     }
   }
   for (const row of source.turns) turnFor(row.id);

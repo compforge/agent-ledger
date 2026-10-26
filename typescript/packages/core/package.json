@@ -1,6 +1,6 @@
 {
   "name": "@compforge/agent-ledger",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@compforge/agent-common": "0.1.1",
-    "@compforge/agent-observation": "0.1.0"
+    "@compforge/agent-observation": "0.2.0"
   },
   "license": "MIT",
   "repository": {

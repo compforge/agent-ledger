@@ -33,8 +33,8 @@ func TestNativeViewRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("roundtrip changed source:\n%s", encoded)
 	}
-	turn := document.Items[1].(*Turn)
-	tool := turn.Items[1].(*ToolCall)
+	turn := document.Nodes[1].(*Turn)
+	tool := turn.Nodes[1].(*ToolCall)
 	if string(tool.Request.Input) != "null" {
 		t.Fatalf("null input lost: %s", tool.Request.Input)
 	}
@@ -51,7 +51,7 @@ func TestNativeViewRoundTrip(t *testing.T) {
 		t.Fatal("dangling model call accepted")
 	}
 	tool.ModelCallID = "m1"
-	tool.ID = turn.Items[0].Base().ID
+	tool.ID = turn.Nodes[0].Base().ID
 	if err = document.Validate(); err == nil {
 		t.Fatal("duplicate id accepted")
 	}
