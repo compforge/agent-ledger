@@ -3,6 +3,7 @@ package observation
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -48,6 +49,9 @@ func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionVi
 			Evidence:   []view.SourceRef{{Source: "agentgo", ID: fmt.Sprint(record.Seq)}},
 			Attributes: map[string]any{"record_type": record.Type}}
 		timestamp := record.Timestamp.Format(time.RFC3339Nano)
+		if record.Execution != nil {
+			base.Attributes["execution"] = *record.Execution
+		}
 		// Preserve native records as evidence even where their semantics are not modeled.
 		operation := func() {
 			base.StartedAt = timestamp
@@ -57,8 +61,10 @@ func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionVi
 		switch agentgo.EventType(record.Type) {
 		case agentgo.EventMessageEnd:
 			var data session.EventData
-			if err := json.Unmarshal(record.Data, &data); err != nil {
-				return fmt.Errorf("record %d: %w", record.Seq, err)
+			if len(record.Data) > 0 {
+				if err := json.Unmarshal(record.Data, &data); err != nil {
+					return fmt.Errorf("record %d: %w", record.Seq, err)
+				}
 			}
 			message := decodeMessage(data.Message, base.ID)
 			if message != nil && message.GetRole() == agentgo.RoleUser {
@@ -70,7 +76,7 @@ func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionVi
 			return nil
 		case agentgo.EventModelExecStart, agentgo.EventModelRequest, agentgo.EventModelExecEnd:
 			kind = "model_call"
-		case agentgo.EventToolInvokeStart, agentgo.EventToolInvokeEnd:
+		case agentgo.EventToolExecStart, agentgo.EventToolExecEnd, agentgo.EventToolInvokeStart, agentgo.EventToolInvokeEnd:
 			kind = "tool_call"
 		default:
 			operation()
@@ -82,15 +88,16 @@ func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionVi
 			return nil
 		}
 		var data session.EventData
-		if err := json.Unmarshal(record.Data, &data); err != nil {
-			return fmt.Errorf("record %d: %w", record.Seq, err)
+		if len(record.Data) > 0 {
+			if err := json.Unmarshal(record.Data, &data); err != nil {
+				return fmt.Errorf("record %d: %w", record.Seq, err)
+			}
 		}
 		keyJSON, _ := json.Marshal([]any{record.RunID, kind, record.Execution.ID, record.Execution.Attempt})
 		key := string(keyJSON)
 		call := calls[key]
 		if call == nil {
 			base.ID = "call:" + key
-			base.Attributes["execution"] = *record.Execution
 			base.Evidence = nil
 			if kind == "model_call" {
 				call = &view.ModelCall{Node: base}
@@ -122,11 +129,16 @@ func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionVi
 				}
 				*request = &common.CallRequest{Input: input}
 			}
-		case agentgo.EventToolInvokeStart:
-			node.StartedAt = timestamp
+		case agentgo.EventToolExecStart, agentgo.EventToolInvokeStart:
+			if node.StartedAt == "" {
+				node.StartedAt = timestamp
+			}
 			*request = &common.CallRequest{ToolName: data.Tool, Input: data.Args}
-		case agentgo.EventModelExecEnd, agentgo.EventToolInvokeEnd:
+		case agentgo.EventModelExecEnd, agentgo.EventToolExecEnd:
 			node.FinishedAt = timestamp
+			if kind == "tool_call" {
+				node.Attributes["disposition"] = data.Disposition
+			}
 			if terminal[key] {
 				node.Status = "unknown"
 				*response = nil
@@ -169,10 +181,11 @@ func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionVi
 		}
 		return nil
 	})
-	if err != nil {
-		return result, err
-	}
+	// A reader error does not erase the validated prefix's ownership.
 	result.Session = common.SessionRef{Source: "agentgo", ID: read.SessionID}
+	if err != nil {
+		result.Issues = append(result.Issues, "Session read: "+err.Error())
+	}
 	if read.TruncatedTail {
 		result.Issues = append(result.Issues, "unterminated final record not observed")
 	}
@@ -188,5 +201,5 @@ func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionVi
 			result.Issues = append(result.Issues, "node "+call.Base().ID+": result not observed")
 		}
 	}
-	return result, result.Validate()
+	return result, errors.Join(err, result.Validate())
 }

@@ -274,6 +274,18 @@ view, err := agentgoobservation.ReadSessionView(reader, nil)
 view, err = ledgerobservation.SessionView(recording)
 ```
 
+The AgentGo reader observes ToolCall at the complete `tool_exec_start` / `tool_exec_end`
+boundary. Middleware-completed and rejected calls remain observable without inventing a
+function invocation. When present, `tool_invoke_start` supplies the actual invocation arguments;
+invocation records remain evidence, while the outer execution result and disposition determine
+completion. A successful inner invocation does not complete an interrupted outer execution.
+Empty lifecycle data preserves timing and identity without manufacturing content.
+
+Callers supply their domain message codec when decoding custom input types. A corrupt suffix
+returns an error together with the accepted prefix and its verified Session identity, so consumers
+can retain partial evidence in a Job. They must display the error or issues rather than treat the
+prefix as a complete Session.
+
 The TypeScript renderer is shared by JSON producers in all languages:
 
 ```sh
