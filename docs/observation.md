@@ -1,4 +1,4 @@
-# Session observation
+# Agent observation
 
 Agent Ledger has three capability boundaries:
 
@@ -6,8 +6,8 @@ Agent Ledger has three capability boundaries:
   usage and errors. It owns neither storage nor presentation.
 - `ledger` supports recoverability through immutable execution facts, Action/Attempt identity,
   idempotent append and opaque Harness-native Checkpoints. The Harness and host decide how to resume.
-- `observation` supports observability. Its current main capability is `SessionView`, a structured
-  read model for following and analyzing one Agent Session. Renderers and downstream analysis consume
+- `observation` supports observability. `SessionView` follows one Agent Session;
+  `JobView` follows one task across Sessions. Both use the same observed item types. Renderers and downstream analysis consume
   this model; observation does not own evaluation policy or Agent execution.
 
 Names are scoped by package. Ledger's `SessionView` is a query result containing durable entities
@@ -20,8 +20,8 @@ facts with the same meaning and contract belong in common.
 One SessionView identifies exactly one Session with `session: {source, id}`. `source` is the
 source namespace; IDs need not be UUIDs. A Session is a continuing agent interaction, not a process
 or business task. Followup, steer and resume can continue that Session. An independent or forked
-Session has another identity. Cross-Session business flow, such as a task passing between agents,
-belongs to a future Timeline and is outside this model.
+Session has another identity. Cross-Session task flow is organized by JobView. A task-oriented loop may serve just one Job;
+a continuous loop can serve many Jobs, and one Job can involve multiple Sessions.
 
 The Ledger owns no authoritative Session row. Adapters must supply a Session identity for the agent
 interaction they record; a business task ID alone does not establish that multiple loops share one
@@ -30,7 +30,7 @@ Those two IDs must not be silently substituted in observation.
 
 ## SessionView contract
 
-The wire document has `schema_version: "agent-ledger/session-view@1"`, a Session reference, ordered
+The wire document has `schema_version: "agent-ledger/session@1"`, a Session reference, ordered
 `items`, optional Lane descriptions, attributes and evidence issues. There is no multi-Run document
 wrapper or nested Session body. Related Sessions can be referenced from a tool observation.
 
@@ -59,6 +59,88 @@ an unanswered request does not become a failed or successful call merely because
 
 The root has no inferred completion status: one run ending or one answer being delivered does not
 close a continuing Session. Call completion is an execution fact, not a quality verdict.
+
+## JobView contract
+
+`agent-ledger/job@1` identifies one business-owned Job with `job: {source, id}`. It carries optional
+`name`, `goal`, `result`, execution `status`, `started_at`, `finished_at`, `attributes` and `issues`;
+`items` is required. A Job is an observation boundary, not a scheduler entity or a durable Ledger
+record. The application decides whether it denotes an overall request or a smaller unit of work.
+Job completion is explicitly recorded by the source; a continuing Agent Session may remain active.
+`completed` describes execution, not a positive quality verdict. A result may be deliberate silence,
+recorded understanding or delegation rather than a user-facing output. Goal and result preserve
+explicit JSON null separately from absence.
+
+Both views use Input, ModelCall, ToolCall, Operation and optional native Turn. A Job has no separate
+Step class. Job-local Operations can organize discovery, verification, waiting, routing, delivery or
+other deterministic work. Native Operations retain their actual source identity. Nesting expresses
+work grouping; recorded time intervals can overlap. Neither nesting nor array order proves causality,
+and no parent time-containment rule is imposed.
+
+### Identity and partial Session evidence
+
+Every item has optional `session: SessionRef`, meaning the Session that owns this execution fact.
+This is distinct from ToolCall's `sessions`, which references other Sessions associated with the call.
+Operation gains no callee Session-reference field.
+
+- Inside SessionView, the root Session is implicit. An explicit item Session must match that root.
+- Inside JobView, an item with `session` is identified by `(source, session id, item id)`.
+- A Job item without `session` is identified in the Job's own namespace.
+- Session ownership is explicit per item in a Job; it is never inherited from an enclosing Operation.
+- Native IDs remain unchanged. Two Sessions may use the same local item ID. Duplicate facts in one
+  namespace are rejected; additional work associations should reference the fact rather than copy it.
+- `run_id`, `lane_id` and `model_call_id` are interpreted within that item's Session (or the current
+  Job for a Job-local item). A same-ID model in another Session cannot satisfy a tool's association.
+
+Applications select recorded Session items using explicit business correlations, add their owning
+Session references, and preserve original call bodies and IDs. They do not mutate the source Session.
+A Job may contain only a fragment. Missing Session-scoped model-call targets and relation endpoints
+are reported by Python `JobView.reference_issues()`, Go `JobView.ReferenceIssues()` and TypeScript
+`referenceIssues(view)`. Those gaps do not fabricate failed executions or trigger fetching. Missing
+Job-local relation targets and model-call links are invalid; an included non-model target is invalid.
+Source `issues` remain unchanged. SessionView continues to require its local model-call targets.
+
+### Dependencies and handoffs
+
+Optional `relations` explicitly connect observed items:
+
+```json
+{
+  "kind": "handoff",
+  "source": {"id": "discover"},
+  "target": {"id": "m1", "session": {"source": "agentgo", "id": "reviewer-2"}},
+  "evidence": [{"source": "business-event", "id": "handoff-1"}]
+}
+```
+
+`depends_on` means source depends on target; `handoff` means source hands work to target. ItemRef
+uses `id` and optional `session`, following the same identity rules. Explicit evidence supports the
+relation; timestamps alone are insufficient. Conflicting business relationships remain source facts
+for evaluation rather than being silently rewritten into a supposedly correct workflow.
+
+### Effect and cost evaluation
+
+SessionView supports inspecting continuity, context use and calls. JobView supports evaluating task
+completion, division of work, handoffs and redundant effort. Criteria and scores remain with analysis
+consumers; Observation provides facts, not an evaluator.
+
+A single model invocation may handle several inputs or Jobs. Several JobViews may reference that
+same call without renaming it, splitting its prompt, or allocating its usage. Full recorded usage is
+not an exclusive Job cost. Consumers need an explicit attribution policy before summing across Jobs;
+within one Job they can deduplicate by source-scoped execution identity.
+
+### Application integrations
+
+CCR's current business Timeline is a migration source, not a dependency or superclass. A CCR adapter
+can construct JobView from Unit/Hypothesis correlations and original Session calls, expressing both
+Agent work and deterministic stages as shared items. Replacing Timeline requires migrating recording,
+persistence, queries and UI in that application; this library does not claim that migration is done.
+
+Aide can use one Input processing task as a Job: Input → routing Operation → Topic assessments →
+Task/Routine work → optional Output delivery. Parallel topics and shared model calls retain their
+identities. An Output can answer several inputs, and handling may finish without an Output. The
+application records scope and completion explicitly; a persistent Routine need not keep every input
+Job open forever. Business adapters, collection and persistence remain application-owned.
 
 ## Following an active Session
 
@@ -151,7 +233,8 @@ view, err = ledgerobservation.SessionView(recording)
 The TypeScript renderer is shared by JSON producers in all languages:
 
 ```sh
-npx --package @compforge/agent-observation session-view session-view.json -o session-view.html
+npx --package @compforge/agent-observation agent-observation session.json -o session.html
+npx --package @compforge/agent-observation agent-observation job.json -o job.html
 ```
 
 Rendering is script-free, escapes native content, and never fetches evidence URLs or Artifact bodies.
@@ -159,9 +242,15 @@ Analysis consumers can use the same model without rendering or storing it in Led
 
 ## Contract verification
 
-`spec/schemas/session-view.schema.json` and the three SDKs agree on the wire format. The shared
+`spec/schemas/session.schema.json` and `job.schema.json` reference the same
+`observation.schema.json` item contract; all three SDKs agree on the wire format. The shared
 `conformance/vectors/session-view.json` covers ordered content, null/zero, missing outcomes and
 references to other Sessions. Ledger fixtures cover retries, parallel Lanes and conflicting outcomes.
 Library adapter tests cover Pi ancestry, stable followup IDs, AgentGo run-scoped calls, incomplete
 records and native user messages. Recovery adapter tests continue to enforce write-before-execute
 and unresolved-side-effect behavior independently of observation.
+
+The shared `job-review.json` vector covers nested Agent work, overlapping intervals, Session-local
+ID collisions, deterministic work and handoffs. `job-input.json` covers shared calls, partial evidence
+and intentional silence. Rendering accepts either root, displays Session provenance and reference
+gaps, and never resumes an Agent or automatically fetches external evidence.

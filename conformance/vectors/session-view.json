@@ -1,5 +1,5 @@
 {
-  "schema_version": "agent-ledger/session-view@1",
+  "schema_version": "agent-ledger/session@1",
   "session": {
     "source": "fixture",
     "id": "native-session"

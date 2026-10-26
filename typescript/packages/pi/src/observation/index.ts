@@ -8,7 +8,7 @@ import { validate, type SessionView, type Node, type ModelCall, type ToolCall } 
  * @see docs/observation.md
  */
 export function sessionView(metadata: SessionMetadata, entries: readonly SessionTreeEntry[]): SessionView {
-  const result: SessionView = {schema_version: "agent-ledger/session-view@1", session: {source: "pi", id: metadata.id}, items: [], attributes: {metadata: json(metadata)}, issues: []};
+  const result: SessionView = {schema_version: "agent-ledger/session@1", session: {source: "pi", id: metadata.id}, items: [], attributes: {metadata: json(metadata)}, issues: []};
   const byId = new Map<string, SessionTreeEntry>();
   const models = new Map<string, ModelCall>();
   for (const entry of entries) {

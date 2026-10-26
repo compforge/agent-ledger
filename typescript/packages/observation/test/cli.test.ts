@@ -14,6 +14,9 @@ test("CLI renders shared JSON and rejects invalid evidence without output", () =
     const output = join(directory, "report.html");
     execFileSync(process.execPath, [cli, source, "--output", output, "--title", "Shared execution"]);
     assert.match(readFileSync(output, "utf8"), /Shared execution/);
+    const job = fileURLToPath(new URL("../../../../../conformance/vectors/job-input.json", import.meta.url));
+    execFileSync(process.execPath, [cli, job, "--output", output]);
+    assert.match(readFileSync(output, "utf8"), /outside Job snapshot/);
     const invalid = join(directory, "invalid.json");
     writeFileSync(invalid, JSON.stringify({schema_version: "unknown", runs: []}));
     const result = spawnSync(process.execPath, [cli, invalid], {encoding: "utf8"});

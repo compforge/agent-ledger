@@ -19,7 +19,7 @@ import (
 // +spec=`Call identity includes run, execution and attempt; EOF does not establish an outcome`
 // +link=docs/observation.md
 func ReadSessionView(reader io.Reader, messageCodec codec.Codec) (view.SessionView, error) {
-	result := view.SessionView{SchemaVersion: view.SchemaVersion, Items: view.Items{}}
+	result := view.SessionView{SchemaVersion: view.SessionSchemaVersion, Items: view.Items{}}
 	if messageCodec == nil {
 		var err error
 		messageCodec, err = agentgo.NewCodec()

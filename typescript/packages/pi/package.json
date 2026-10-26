@@ -1,6 +1,6 @@
 {
   "name": "@compforge/agent-pi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "exports": {
     "./ledger": {
@@ -13,9 +13,9 @@
     }
   },
   "dependencies": {
-    "@compforge/agent-ledger": "0.1.0",
+    "@compforge/agent-ledger": "0.2.0",
     "@compforge/agent-common": "0.1.1",
-    "@compforge/agent-observation": "0.1.0"
+    "@compforge/agent-observation": "0.2.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": ">=0.80 <1"

@@ -5,7 +5,7 @@ import type { SessionView as LedgerSessionView, StoredEvent } from "./types.js";
 const terminal: Record<string, Status> = { completed: "completed", failed: "failed", cancelled: "cancelled", outcome_unknown: "outcome_unknown" };
 /** Read-only projection. Every physical attempt stays visible; no recovery decisions are made. */
 export function sessionView(source: LedgerSessionView): SessionView {
-  const document: SessionView = {schema_version: "agent-ledger/session-view@1", session: {source: "ledger", id: source.session_id}, items: [], lanes: [], issues: []};
+  const document: SessionView = {schema_version: "agent-ledger/session@1", session: {source: "ledger", id: source.session_id}, items: [], lanes: [], issues: []};
   const issue = (message: string) => document.issues!.push(message);
   const actions = new Map(source.actions.map(x => [x.id, x]));
   const attempts = new Map(source.attempts.map(x => [x.id, x]));

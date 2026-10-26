@@ -18,7 +18,7 @@ var viewTerminals = map[string]string{"completed": "completed", "failed": "faile
 // +spec=`Each physical call survives projection; missing results and recorded unknown outcomes differ`
 // +link=docs/observation.md
 func SessionView(source agentledger.SessionView) (view.SessionView, error) {
-	document := view.SessionView{SchemaVersion: view.SchemaVersion, Session: common.SessionRef{Source: "ledger", ID: source.SessionID}, Items: view.Items{}}
+	document := view.SessionView{SchemaVersion: view.SessionSchemaVersion, Session: common.SessionRef{Source: "ledger", ID: source.SessionID}, Items: view.Items{}}
 	actions := map[string]agentledger.Action{}
 	attempts := map[string]agentledger.Attempt{}
 	rows := map[string]agentledger.Turn{}

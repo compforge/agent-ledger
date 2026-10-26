@@ -22,10 +22,10 @@ def fixture(name: str) -> dict:
 def schema_validator() -> Draft202012Validator:
     schemas = [
         json.loads((ROOT / "spec/schemas" / name).read_text())
-        for name in ("common.schema.json", "session-view.schema.json")
+        for name in ("common.schema.json", "observation.schema.json", "session.schema.json")
     ]
     registry = Registry().with_resources((s["$id"], Resource.from_contents(s)) for s in schemas)
-    return Draft202012Validator(schemas[1], registry=registry, format_checker=FormatChecker())
+    return Draft202012Validator(schemas[-1], registry=registry, format_checker=FormatChecker())
 
 
 def test_native_view_round_trip_and_schema() -> None:

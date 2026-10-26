@@ -1,0 +1,41 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "agent-ledger/session@1"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "session": {
+      "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/observation.schema.json#/$defs/item"
+      }
+    },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/observation.schema.json#/$defs/lane"
+      }
+    },
+    "attributes": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "session",
+    "items"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/session.schema.json",
+  "title": "SessionView"
+}

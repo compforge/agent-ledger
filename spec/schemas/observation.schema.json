@@ -1,43 +1,7 @@
 {
-  "type": "object",
-  "properties": {
-    "schema_version": {
-      "const": "agent-ledger/session-view@1"
-    },
-    "issues": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "session": {
-      "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
-    },
-    "items": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/item"
-      }
-    },
-    "lanes": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/lane"
-      }
-    },
-    "attributes": {
-      "type": "object"
-    }
-  },
-  "required": [
-    "schema_version",
-    "session",
-    "items"
-  ],
-  "additionalProperties": false,
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/session-view.schema.json",
-  "title": "SessionView",
+  "$id": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/observation.schema.json",
+  "title": "Shared observation items and references",
   "$defs": {
     "source": {
       "type": "object",
@@ -132,6 +96,9 @@
         "run_id": {
           "type": "string",
           "minLength": 1
+        },
+        "session": {
+          "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
         }
       },
       "required": [
@@ -194,6 +161,9 @@
         "run_id": {
           "type": "string",
           "minLength": 1
+        },
+        "session": {
+          "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
         }
       },
       "required": [
@@ -269,6 +239,9 @@
         "run_id": {
           "type": "string",
           "minLength": 1
+        },
+        "session": {
+          "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
         }
       },
       "required": [
@@ -335,6 +308,9 @@
         "run_id": {
           "type": "string",
           "minLength": 1
+        },
+        "session": {
+          "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
         }
       },
       "required": [
@@ -397,6 +373,9 @@
         "run_id": {
           "type": "string",
           "minLength": 1
+        },
+        "session": {
+          "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
         }
       },
       "required": [
@@ -424,6 +403,69 @@
           "$ref": "#/$defs/turn"
         }
       ]
+    },
+    "job": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "source",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "item_ref": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session": {
+          "$ref": "https://raw.githubusercontent.com/compforge/agent-ledger/main/spec/schemas/common.schema.json#/$defs/session"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "relation": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "depends_on",
+            "handoff"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/item_ref"
+        },
+        "target": {
+          "$ref": "#/$defs/item_ref"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "source",
+        "target"
+      ],
+      "additionalProperties": false
     }
   }
 }
